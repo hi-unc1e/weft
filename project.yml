@@ -3,7 +3,7 @@ name: Weft
 options:
   bundleIdPrefix: me.weishu
   deploymentTarget:
-    macOS: "26.0"
+    macOS: "15.0"
   createIntermediateGroups: true
 
 configFiles:
@@ -13,8 +13,8 @@ configFiles:
 settings:
   base:
     SWIFT_VERSION: "6.0"
-    MARKETING_VERSION: "0.1.0"
-    CURRENT_PROJECT_VERSION: "1"
+    MARKETING_VERSION: "0.2.0"
+    CURRENT_PROJECT_VERSION: "2"
 
 packages:
   WeftKit:
@@ -31,6 +31,7 @@ targets:
     info:
       path: App/Info.plist
       properties:
+        WeftSourceRevision: $(WEFT_SOURCE_REVISION)
         CFBundleDisplayName: Weft
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)

@@ -6,3 +6,17 @@ xcuserdata/
 DerivedData/
 .DS_Store
 Config/Local.xcconfig
+
+# Local settings, runtime history, credentials and private delivery notes
+.env
+.env.*
+*.p8
+*.p12
+*.pem
+*.key
+*.store
+*.store-*
+*.sqlite*
+*.db
+*.log
+DELIVERY.local.md

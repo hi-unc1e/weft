@@ -98,14 +98,24 @@ enum Keychain {
     }
 
     /// An empty value removes the item.
-    static func set(_ value: String, for account: String) {
+    static func set(_ value: String, for account: String) throws {
         let item: [CFString: Any] = [kSecClass: kSecClassGenericPassword, kSecAttrService: service, kSecAttrAccount: account]
-        SecItemDelete(item as CFDictionary)
-        guard !value.isEmpty else { return }
-        var added = item
-        added[kSecValueData] = Data(value.utf8)
-        let status = SecItemAdd(added as CFDictionary, nil)
-        if status != errSecSuccess { NSLog("Weft: saving to the keychain failed: \(status)") }
+        let status: OSStatus
+        if value.isEmpty {
+            status = SecItemDelete(item as CFDictionary)
+            if status == errSecItemNotFound { return }
+        } else {
+            let data = Data(value.utf8)
+            let updated = SecItemUpdate(item as CFDictionary, [kSecValueData: data] as CFDictionary)
+            if updated == errSecItemNotFound {
+                var added = item
+                added[kSecValueData] = data
+                status = SecItemAdd(added as CFDictionary, nil)
+            } else { status = updated }
+        }
+        guard status == errSecSuccess else {
+            throw NSError(domain: "Weft.Keychain", code: Int(status), userInfo: [NSLocalizedDescriptionKey: "无法保存到钥匙串（\(status)），原有配置未更改。"])
+        }
     }
 }
 

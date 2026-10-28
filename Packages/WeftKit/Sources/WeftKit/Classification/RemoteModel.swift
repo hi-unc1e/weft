@@ -22,7 +22,8 @@ public struct RemoteModelConfig: Sendable, Equatable {
         while base.hasSuffix("/") { base.removeLast() }
         if !base.hasSuffix("/chat/completions") { base += "/chat/completions" }
         guard let url = URL(string: base), let scheme = url.scheme?.lowercased(),
-              scheme == "http" || scheme == "https", url.host() != nil else { return nil }
+              scheme == "http" || scheme == "https", url.host() != nil, url.user == nil, url.password == nil,
+              url.query == nil, url.fragment == nil else { return nil }
         return url
     }
 }
@@ -36,8 +37,8 @@ public enum RemoteModelError: LocalizedError {
         switch self {
         case .http(let status, let message?): "The server answered \(status): \(message)"
         case .http(let status, nil): "The server answered \(status)."
-        case .emptyReply: "The model sent an empty reply."
-        case .unreadableReply: "The model's reply wasn't in the expected format."
+        case .emptyReply: "模型返回了空内容。"
+        case .unreadableReply: "模型返回格式无效。"
         }
     }
 }
@@ -55,8 +56,8 @@ public struct OpenAICompatibleClassifier: AIClassifying {
     }
 
     public func availability() -> AIAvailability {
-        if config.endpoint == nil { return .unavailable("The API base URL isn't valid.") }
-        if config.model.trimmingCharacters(in: .whitespaces).isEmpty { return .unavailable("No model is set.") }
+        if config.endpoint == nil { return .unavailable("接口地址无效，请填写 HTTP(S) Base URL。") }
+        if config.model.trimmingCharacters(in: .whitespaces).isEmpty { return .unavailable("请填写模型名称。") }
         return .available
     }
 
@@ -80,6 +81,23 @@ public struct OpenAICompatibleClassifier: AIClassifying {
     }
 
     private func complete(instructions: String, prompt: String) async throws -> String {
+        for attempt in 0..<3 {
+            do { return try await send(instructions: instructions, prompt: prompt) }
+            catch {
+                let transient: Bool
+                if case RemoteModelError.http(let status, _) = error {
+                    transient = status == 429 || (500...599).contains(status)
+                } else if let urlError = error as? URLError {
+                    transient = [.timedOut, .networkConnectionLost, .cannotConnectToHost].contains(urlError.code)
+                } else { transient = false }
+                guard transient, attempt < 2, !Task.isCancelled else { throw error }
+                try await Task.sleep(for: .seconds(attempt + 1))
+            }
+        }
+        throw RemoteModelError.emptyReply
+    }
+
+    private func send(instructions: String, prompt: String) async throws -> String {
         guard let endpoint = config.endpoint else { throw URLError(.badURL) }
         var request = URLRequest(url: endpoint, timeoutInterval: 60)
         request.httpMethod = "POST"
@@ -95,7 +113,7 @@ public struct OpenAICompatibleClassifier: AIClassifying {
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         guard (200..<300).contains(status) else {
             let message = (try? JSONDecoder().decode(ErrorResponse.self, from: data))?.error.message
-            throw RemoteModelError.http(status: status, message: message)
+            throw RemoteModelError.http(status: status, message: message == nil ? nil : "请求失败，请检查模型名称、接口配置或服务商状态。")
         }
         let content = try JSONDecoder().decode(ChatResponse.self, from: data).choices.first?.message.content ?? ""
         let text = Self.stripReasoning(content).trimmingCharacters(in: .whitespacesAndNewlines)

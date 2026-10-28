@@ -56,7 +56,7 @@ struct ReviewView: View {
                         Text(Format.duration(item.duration)).monospacedDigit()
                     }
                     .width(110)
-                    TableColumn("Status") { item in
+                    TableColumn("状态") { item in
                         switch item.source {
                         case .pending: Label("Waiting", systemImage: "hourglass").foregroundStyle(.secondary)
                         case .guess: Label("Guess", systemImage: "questionmark.circle").foregroundStyle(.secondary)
@@ -90,7 +90,7 @@ struct ReviewView: View {
                 }
             }
         }
-        .navigationTitle("Review")
+        .navigationTitle("待确认")
         .toolbar {
             let confident = items.filter { $0.source == .ai && $0.confidence == .high }
             Button {
@@ -120,7 +120,7 @@ struct ReviewView: View {
                 SettingsLink { Text("Model Settings…") }
             }
             Spacer()
-            Button("Retry") { model.classifier.retryPending() }
+            Button("重试") { model.classifier.retryPending() }
                 .help("Ask the model again about everything still waiting or guessed")
         }
         .font(.callout)

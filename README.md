@@ -1,3 +1,13 @@
+# Weft · hi-unc1e fork
+
+[Download v0.2.0](https://github.com/hi-unc1e/weft/releases/tag/v0.2.0) · [Install, privacy and validation](RELEASE.md) · [Changelog](CHANGELOG.md)
+
+This fork targets macOS 15+ and supports user-configured OpenAI-compatible models. Release binaries are Apple Silicon only, ad-hoc signed and **not notarized**; macOS may block downloaded copies. The upstream notarization statements below refer to upstream distributions, not this fork.
+
+> 本地适配版：支持 macOS 15+；Apple 本地模型需要 macOS 26+。在“设置 → 模型”中选择 OpenAI 兼容接口，填写 Base URL（如 `https://api.openai.com/v1`）、Model 和 API Key，点击“保存并连接”。支持本地无密钥服务。主要界面与 AI 输出为简体中文。
+> 远程配置保存并启用后，相关活动信息会发送到配置的服务商；API Key 仅存系统钥匙串。临时错误最多尝试 3 次，活动摘要失败后冷却 5 分钟再补齐，也可手动重试。
+> 本地构建采用临时签名，未公证；重新构建后可能需要重新授权辅助功能。
+
 # Weft
 
 **See where your day actually went, without sending it anywhere.**
@@ -10,7 +20,7 @@ Weft takes after [Rize](https://rize.io) but works from a different idea: people
 
 - **Native and small.** Weft is built with SwiftUI, so it looks and feels like the rest of macOS. The whole app is under 10 MB, with no Electron and no bundled browser.
 - **Easy on your battery.** A native app already uses far less power than an Electron one. Weft is also event-driven instead of constantly polling your windows, so it stays idle until something actually changes.
-- **Your data never leaves your Mac.** There's no account, no server and no analytics. Categories, summaries and reviews come from Apple's on-device model by default, and your history stays in a folder on your Mac (see [Privacy](#privacy)).
+- **Your history is stored on your Mac.** There's no account, no server and no analytics. Categories, summaries and reviews come from Apple's on-device model by default, and your history stays in a folder on your Mac (see [Privacy](#privacy)).
 - **Open source and free.** Weft is [MIT-licensed](LICENSE), with no subscription and no paid tier. You can read the code, change it and build it yourself.
 
 ## What you get
@@ -47,9 +57,9 @@ The **Review** page collects the AI's guesses so you can confirm them in one go.
 
 You'll need **macOS 26 or later**. Apple Intelligence is optional but recommended (it isn't offered in every region). Without it, Weft still categorizes the apps and sites it already knows and anything you've set yourself, and makes a rough guess for the rest from each app's App Store category or each site's name. Those guesses wait on the Review page for you to confirm or fix. You can also connect any OpenAI-compatible API (OpenAI, OpenRouter, DeepSeek, a local Ollama…) in **Settings → Model**.
 
-1. Download the latest `Weft-<version>.dmg` from [Releases](https://github.com/tiann/weft/releases/latest).
+1. Download the latest `Weft-<version>.dmg` from [Releases](https://github.com/hi-unc1e/weft/releases/latest).
 2. Open it and drag **Weft** into **Applications**.
-3. Open Weft from Applications. It's signed and notarized by Apple, so macOS opens it without warnings.
+3. Open Weft from Applications. This fork is ad-hoc signed and not notarized; macOS may block downloaded copies.
 
 Weft appears in the menu bar. On first launch, it asks for Accessibility access. The other permissions come up the first time Weft needs them:
 
@@ -67,7 +77,7 @@ Install [Xcode](https://apps.apple.com/app/xcode/id497799835) and [Homebrew](htt
 
 ```sh
 brew install xcodegen
-git clone https://github.com/tiann/weft.git
+git clone https://github.com/hi-unc1e/weft.git
 cd weft
 xcodegen generate
 xcodebuild -project Weft.xcodeproj -scheme Weft -derivedDataPath build/DerivedData build

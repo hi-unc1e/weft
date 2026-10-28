@@ -2,7 +2,7 @@
 
 Guidance for coding agents working in this repository.
 
-Weft is a local-first macOS (26+) menu bar time tracker written in Swift 6 / SwiftUI / SwiftData. It classifies activity with rules plus Apple's on-device Foundation Models, or an OpenAI-compatible API if the user sets one up. By default nothing leaves the Mac.
+Weft is a local-first macOS (15+; Apple models require 26+) menu bar time tracker written in Swift 6 / SwiftUI / SwiftData. It classifies activity with rules plus Apple's on-device Foundation Models, or an OpenAI-compatible API if the user sets one up. By default nothing leaves the Mac.
 
 ## Commands
 

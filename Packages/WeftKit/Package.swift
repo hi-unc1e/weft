@@ -3,7 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "WeftKit",
-    platforms: [.macOS(.v26)],
+    platforms: [.macOS(.v15)],
     products: [
         .library(name: "WeftKit", targets: ["WeftKit"]),
     ],

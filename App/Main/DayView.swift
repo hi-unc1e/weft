@@ -29,7 +29,7 @@ struct DayView: View {
                     Button { shift(-1) } label: { Image(systemName: "chevron.left") }
                         .help("Previous day")
                         .keyboardShortcut(.leftArrow, modifiers: .command)
-                    Button("Today") { model.showDay() }
+                    Button("今天") { model.showDay() }
                         .disabled(Calendar.current.isDateInToday(day))
                         .keyboardShortcut("t", modifiers: .command)
                     Button { shift(1) } label: { Image(systemName: "chevron.right") }
@@ -52,7 +52,7 @@ enum DayTab: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .timeline: "Timeline"
+        case .timeline: "时间线"
         case .breakdown: "Categories & Apps"
         case .log: "Log"
         }
@@ -107,7 +107,7 @@ private struct DayContent: View {
             VStack(alignment: .leading, spacing: 16) {
                 if segments.isEmpty {
                     ContentUnavailableView("No activity", systemImage: "clock",
-                                           description: Text("Nothing was tracked on this day."))
+                                           description: Text("这一天还没有记录。"))
                         .frame(maxWidth: .infinity, minHeight: 300)
                 } else {
                     Overview(metrics: metrics, target: model.preferences.workHoursTarget * 3600,
@@ -125,7 +125,7 @@ private struct DayContent: View {
                             DayTimeline(day: day, segments: segments, sessions: sessions) { tab = .log }
                         case .breakdown:
                             HStack(alignment: .top, spacing: 16) {
-                                Card("Categories") { CategoryBreakdown(metrics: metrics) }
+                                Card("分类") { CategoryBreakdown(metrics: metrics) }
                                 Card("Apps & sites") { AppBreakdown(samples: samples, total: metrics.activeTime) }
                             }
                         case .log:
@@ -189,7 +189,7 @@ private struct Overview: View {
                 ScoreRing(score: metrics.score, activeTime: metrics.activeTime, size: 112)
             }
             .buttonStyle(.plain)
-            .help("How the Focus Score works")
+            .help("专注评分如何计算")
             .popover(isPresented: $showScoreDetails) { ScoreExplanation(score: metrics.score).padding() }
 
             VStack(alignment: .leading, spacing: 10) {
@@ -204,7 +204,7 @@ private struct Overview: View {
                 }
                 GoalBar(metrics: metrics, target: target)
                 HStack(spacing: 14) {
-                    legend(GoalBar.focusColor, "Focus", metrics.focusTime)
+                    legend(GoalBar.focusColor, "专注", metrics.focusTime)
                     legend(GoalBar.meetingColor, "Meetings", metrics.meetingTime)
                     legend(GoalBar.otherColor, "Other", max(0, metrics.activeTime - metrics.focusTime - metrics.meetingTime - metrics.distractingTime))
                     legend(GoalBar.distractedColor, "Distracted", metrics.distractingTime)
@@ -284,7 +284,7 @@ private struct ScoreExplanation: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("How the Focus Score works").font(.headline)
+            Text("专注评分如何计算").font(.headline)
             Text("100 × (½ deep-work share + ½ focus share) − switching penalty − distraction penalty. Meetings are left out.")
                 .font(.callout).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -295,7 +295,7 @@ private struct ScoreExplanation: View {
                 LabeledContent("Switching penalty", value: String(format: "−%.0f", score.switchPenalty))
                 LabeledContent("Distraction penalty", value: String(format: "−%.0f", score.distractionPenalty))
             } else {
-                Text("Needs at least 15 minutes of tracked time.").font(.callout)
+                Text("至少记录 15 分钟后计算评分。").font(.callout)
             }
         }
         .frame(width: 340)
@@ -315,7 +315,7 @@ private struct DailyReview: View {
     var body: some View {
         if text == nil, case .unavailable(let reason) = model.classifier.aiAvailability {
             // Nothing to act on here, so keep it out of the way.
-            Label("Daily reviews need a model. \(reason) You can set one up in Settings → Model.", systemImage: "sparkles")
+            Label("每日回顾需要配置模型。 \(reason) 请前往“设置 → 模型”。", systemImage: "sparkles")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 4)
@@ -331,7 +331,7 @@ private struct DailyReview: View {
                 if let text {
                     Text(text).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
                 } else {
-                    Text("Get a short review of this day and a suggestion for tomorrow, written \(model.modelPlace).")
+                    Text("回顾今天并获得明日建议，使用 \(model.modelPlace).")
                         .foregroundStyle(.secondary)
                 }
                 if let error {
@@ -343,7 +343,7 @@ private struct DailyReview: View {
                 if isGenerating {
                     ProgressView().controlSize(.small)
                 } else {
-                    Button(text == nil ? "Review My Day" : "Regenerate", action: generate)
+                    Button(text == nil ? "回顾今天" : "重新生成", action: generate)
                 }
             }
         }
@@ -359,7 +359,7 @@ private struct DailyReview: View {
             do {
                 text = try await model.ai.summarize(facts)
             } catch {
-                self.error = "Could not generate a review: \(error.localizedDescription)"
+                self.error = "生成回顾失败： \(error.localizedDescription)"
             }
             isGenerating = false
         }
@@ -372,9 +372,8 @@ private struct DailyReview: View {
         let apps = metrics.byApp.sorted { $0.value > $1.value }.prefix(5).map { "\($0.key) \(Format.duration($0.value))" }
         let sites = metrics.byDomain.sorted { $0.value > $1.value }.prefix(5).map { "\($0.key) \(Format.duration($0.value))" }
         let busiest = metrics.byHour.sorted { $0.value > $1.value }.prefix(3).map { "\($0.key):00" }
-        let language = Locale.current.localizedString(forLanguageCode: Locale.preferredLanguages.first ?? "en") ?? "English"
         return """
-            Respond in \(language).
+            Respond in Simplified Chinese.
             Day: \(day.formatted(date: .complete, time: .omitted))
             Tracked time: \(Format.duration(metrics.activeTime)) (target \(Format.duration(model.preferences.workHoursTarget * 3600)))
             Focus time: \(Format.duration(metrics.focusTime)); deep work (25+ minute stretches): \(Format.duration(metrics.deepWorkTime)); longest focus stretch: \(Format.duration(metrics.longestFocusStretch))

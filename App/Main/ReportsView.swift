@@ -12,7 +12,7 @@ struct ReportsView: View {
         let isCurrent = week.contains(.now)
         WeekReport(start: week.start)
             .id(week.start)
-            .navigationTitle("Reports")
+            .navigationTitle("统计报告")
             .navigationSubtitle(rangeLabel(week))
             .toolbar {
                 ToolbarItemGroup {
@@ -100,7 +100,7 @@ private struct WeekReport: View {
                     HStack(spacing: 12) {
                         summaryTile("Tracked", total.activeTime, change: change(\.activeTime),
                                     "\(Format.duration(total.activeTime / Double(max(summary.activeDays, 1)))) a day over \(summary.activeDays) day\(summary.activeDays == 1 ? "" : "s")")
-                        summaryTile("Focus", total.focusTime, change: change(\.focusTime), "\(Format.duration(total.deepWorkTime)) deep work")
+                        summaryTile("专注", total.focusTime, change: change(\.focusTime), "\(Format.duration(total.deepWorkTime)) deep work")
                         summaryTile("Meetings", total.meetingTime, change: change(\.meetingTime), higherIsBetter: false,
                                     share(total.meetingTime, of: total.activeTime))
                         summaryTile("Distracted", total.distractingTime, change: change(\.distractingTime), higherIsBetter: false,

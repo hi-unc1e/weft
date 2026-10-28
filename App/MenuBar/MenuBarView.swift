@@ -33,10 +33,10 @@ struct MenuBarView: View {
                 HStack(spacing: 6) {
                     if preferences.trackingPaused {
                         Image(systemName: "pause.fill").font(.caption2).foregroundStyle(.orange)
-                        Text("Paused").foregroundStyle(.orange)
+                        Text("已暂停").foregroundStyle(.orange)
                     } else {
                         Circle().fill(.green).frame(width: 8, height: 8)
-                        Text("Tracking").foregroundStyle(.primary)
+                        Text("活动记录").foregroundStyle(.primary)
                     }
                 }
                 .frame(minWidth: 84, alignment: .leading)
@@ -44,7 +44,7 @@ struct MenuBarView: View {
             .help(preferences.trackingPaused ? "Click to resume tracking" : "Click to pause tracking")
 
             Spacer()
-            Button("Open Dashboard") {
+            Button("打开主面板") {
                 model.showDay()
                 openWindow(id: MainView.windowID)
                 NSApp.activate()
@@ -52,7 +52,7 @@ struct MenuBarView: View {
             Button(action: showSettings) { Image(systemName: "gearshape") }
                 .help("Settings")
             Button { NSApp.terminate(nil) } label: { Image(systemName: "power") }
-                .help("Quit Weft")
+                .help("退出 Weft")
         }
         .buttonStyle(.borderless)
     }
@@ -100,7 +100,7 @@ private struct TodayCard: View {
             }
             GoalBar(metrics: metrics, target: target)
             HStack(spacing: 14) {
-                LegendItem(color: GoalBar.focusColor, title: "Focus", value: metrics.focusTime)
+                LegendItem(color: GoalBar.focusColor, title: "专注", value: metrics.focusTime)
                 LegendItem(color: GoalBar.meetingColor, title: "Meetings", value: metrics.meetingTime)
                 LegendItem(color: GoalBar.distractedColor, title: "Distracted", value: metrics.distractingTime)
             }
@@ -164,7 +164,7 @@ struct GoalBar: View {
         let scale = max(target, metrics.activeTime, 1)
         let other = max(0, metrics.activeTime - metrics.focusTime - metrics.meetingTime - metrics.distractingTime)
         let parts: [(String, TimeInterval, Color)] = [
-            ("Focus", metrics.focusTime, Self.focusColor),
+            ("专注", metrics.focusTime, Self.focusColor),
             ("Meetings", metrics.meetingTime, Self.meetingColor),
             ("Other", other, Self.otherColor),
             ("Distracted", metrics.distractingTime, Self.distractedColor),
@@ -225,7 +225,7 @@ private struct CurrentActivityRow: View {
                 } else {
                     Image(systemName: model.preferences.trackingPaused ? "pause.circle" : "moon.zzz")
                         .font(.title2).foregroundStyle(.secondary).frame(width: 28)
-                    Text(model.preferences.trackingPaused ? "Tracking is paused" : "Away")
+                    Text(model.preferences.trackingPaused ? "记录已暂停" : "离开")
                         .foregroundStyle(.secondary)
                     Spacer()
                 }
@@ -240,7 +240,7 @@ private struct CurrentActivityRow: View {
                     SystemProbe.requestAccessibility()
                     openSettings()
                 } label: {
-                    Label("Grant Accessibility access to record window titles", systemImage: "exclamationmark.triangle")
+                    Label("授予辅助功能权限后才能记录窗口标题", systemImage: "exclamationmark.triangle")
                         .font(.caption)
                 }
                 .buttonStyle(.link)
@@ -359,7 +359,7 @@ private struct ActiveSessionRow: View {
             }
             Spacer()
             Button("+5 min") { model.sessions.extend(minutes: 5) }
-            Button("Stop") { model.sessions.stop() }
+            Button("结束") { model.sessions.stop() }
                 .buttonStyle(.borderedProminent)
         }
         .padding(10)
@@ -395,12 +395,12 @@ struct SessionSummaryCard: View {
                 ScoreRing(score: summary.score, size: 40)
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Focused \(summary.focusPercent.map(Format.percent) ?? "–") of the time")
-                    Text(summary.distractions == 0 ? "No distractions" : "\(summary.distractions) distraction\(summary.distractions == 1 ? "" : "s")")
+                    Text(summary.distractions == 0 ? "没有分心" : "\(summary.distractions) distraction\(summary.distractions == 1 ? "" : "s")")
                         .foregroundStyle(.secondary)
                 }
                 .font(.callout)
             }
-            Text("How focused did you feel?").font(.caption).foregroundStyle(.secondary)
+            Text("你觉得自己有多专注？").font(.caption).foregroundStyle(.secondary)
             HStack(spacing: 3) {
                 ForEach(1...10, id: \.self) { value in
                     Button("\(value)") {

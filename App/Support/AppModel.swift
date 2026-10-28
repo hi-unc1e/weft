@@ -10,11 +10,11 @@ enum Page: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .today: "Today"
-        case .reports: "Reports"
-        case .review: "Review"
-        case .categories: "Categories"
-        case .rules: "Rules"
+        case .today: "今天"
+        case .reports: "统计报告"
+        case .review: "待确认"
+        case .categories: "分类"
+        case .rules: "规则"
         }
     }
 
@@ -84,6 +84,7 @@ final class AppModel {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(30))
                 self?.timeEntries.describeToday()
+                self?.classifier.retryPending()
                 try? await Task.sleep(for: .seconds(270))
             }
         }
@@ -153,7 +154,7 @@ final class AppModel {
     private static func chosenModel(_ preferences: Preferences) -> any AIClassifying {
         switch preferences.modelProvider {
         case .appleIntelligence:
-            FoundationModelsClassifier()
+            LocalModel.make()
         case .openAICompatible:
             OpenAICompatibleClassifier(config: RemoteModelConfig(
                 baseURL: preferences.remoteBaseURL, model: preferences.remoteModel,
@@ -174,6 +175,7 @@ final class AppModel {
     func applyModelChoice() {
         ai.use(Self.chosenModel(preferences))
         classifier.retryPending()
+        timeEntries.retryFailed()
     }
 
     func refreshPermissions() {

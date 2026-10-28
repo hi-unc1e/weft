@@ -24,7 +24,7 @@ public final class ClassificationService {
     @ObservationIgnored private var worker: Task<Void, Never>?
     @ObservationIgnored private var categoryIndex: [String: CategoryDefinition] = [:]
 
-    public init(modelContext: ModelContext, ai: any AIClassifying = FoundationModelsClassifier()) {
+    public init(modelContext: ModelContext, ai: any AIClassifying = LocalModel.make()) {
         self.modelContext = modelContext
         self.ai = ai
         aiAvailability = ai.availability()

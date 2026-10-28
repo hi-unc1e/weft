@@ -8,10 +8,13 @@ private final class StubProtocol: URLProtocol {
     nonisolated(unsafe) static var lastRequest: URLRequest?
     nonisolated(unsafe) static var lastBody: Data?
 
+    nonisolated(unsafe) static var requests = 0
+
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
 
     override func startLoading() {
+        Self.requests += 1
         Self.lastRequest = request
         Self.lastBody = request.httpBodyStream.map { stream in
             stream.open()
@@ -113,7 +116,41 @@ struct RemoteModelTests {
             _ = try await classifier().summarize("facts")
             Issue.record("expected an error")
         } catch {
-            #expect(error.localizedDescription == "The server answered 401: Incorrect API key provided.")
+            #expect(error.localizedDescription == "The server answered 401: 请求失败，请检查模型名称、接口配置或服务商状态。")
         }
     }
+    @Test func rejectsCredentialsQueriesAndFragmentsInBaseURL() {
+        for base in ["https://user:secret@example.com/v1", "https://example.com/v1?key=secret", "https://example.com/v1#fragment"] {
+            #expect(RemoteModelConfig(baseURL: base, model: "m", apiKey: "").endpoint == nil)
+        }
+    }
+
+    @Test func transientFailuresRetryAtMostThreeTimes() async {
+        StubProtocol.reply = (503, "{}")
+        StubProtocol.requests = 0
+        do { _ = try await classifier().summarize("facts"); Issue.record("expected failure") }
+        catch { #expect(StubProtocol.requests == 3) }
+    }
+
+    @Test func authenticationFailuresAreNotRetriedOrEchoed() async {
+        StubProtocol.reply = (401, #"{"error":{"message":"sensitive-provider-response"}}"#)
+        StubProtocol.requests = 0
+        do { _ = try await classifier().summarize("facts"); Issue.record("expected failure") }
+        catch {
+            #expect(StubProtocol.requests == 1)
+            #expect(!error.localizedDescription.contains("sensitive-provider-response"))
+        }
+    }
+
+    @Test func malformedAndEmptyAnswersDoNotRetry() async {
+        for body in ["{}", chatReply(""), chatReply("not json") ] {
+            StubProtocol.reply = (200, body)
+            StubProtocol.requests = 0
+            do {
+                _ = try await classifier().classify(ActivityContext(bundleID: "unknown", appName: "unknown"), categories: categories)
+                Issue.record("expected invalid response")
+            } catch { #expect(StubProtocol.requests == 1) }
+        }
+    }
+
 }

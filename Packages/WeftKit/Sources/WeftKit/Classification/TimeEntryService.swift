@@ -12,7 +12,7 @@ public final class TimeEntryService {
     @ObservationIgnored private let modelContext: ModelContext
     @ObservationIgnored private let ai: any AIClassifying
     @ObservationIgnored private var queue: [(key: String, facts: String)] = []
-    @ObservationIgnored private var failed: Set<String> = []
+    @ObservationIgnored private var failed: [String: Date] = [:]
     @ObservationIgnored private var worker: Task<Void, Never>?
 
     public init(modelContext: ModelContext, ai: any AIClassifying) {
@@ -31,7 +31,7 @@ public final class TimeEntryService {
         guard ai.availability() == .available else { return }
         for entry in entries where entry.isComplete(now: now) {
             let key = entry.key
-            guard descriptions[key] == nil, !failed.contains(key), !queue.contains(where: { $0.key == key }) else { continue }
+            guard descriptions[key] == nil, (failed[key].map { now.timeIntervalSince($0) >= 300 } ?? true), !queue.contains(where: { $0.key == key }) else { continue }
             queue.append((key, entry.facts))
         }
         if worker == nil, !queue.isEmpty {
@@ -48,17 +48,25 @@ public final class TimeEntryService {
         describe(TimeEntries.significant(TimeEntries.build(segments)))
     }
 
+    /// Allows an explicit retry after saving a model configuration or restoring connectivity.
+    public func retryFailed() {
+        failed.removeAll()
+        describeToday()
+    }
+
     private func drain() async {
-        let language = Locale.current.localizedString(forLanguageCode: Locale.preferredLanguages.first ?? "en") ?? "English"
+        let language = "Simplified Chinese"
         while let next = queue.first {
             do {
                 let text = try await ai.describeActivity(next.facts, language: language)
                     .trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !text.isEmpty else { throw RemoteModelError.emptyReply }
+                failed.removeValue(forKey: next.key)
                 descriptions[next.key] = text
                 modelContext.insert(TimeEntrySummary(key: next.key, text: text))
                 try? modelContext.save()
             } catch {
-                failed.insert(next.key)
+                failed[next.key] = .now
             }
             queue.removeFirst()
         }

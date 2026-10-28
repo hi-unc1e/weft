@@ -18,7 +18,7 @@ enum CategoryType: CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .focus: "Focus"
+        case .focus: "专注"
         case .meeting: "Meetings"
         case .neutral: "Neutral"
         case .distracting: "Distracting"
@@ -77,7 +77,7 @@ struct CategoriesView: View {
             }
         }
         .formStyle(.grouped)
-        .navigationTitle("Categories")
+        .navigationTitle("分类")
     }
 }
 
@@ -143,8 +143,8 @@ private struct CategoryEditor: View {
                 .font(.caption).foregroundStyle(.secondary)
             HStack {
                 Spacer()
-                Button("Cancel") { dismiss() }
-                Button("Save") {
+                Button("取消") { dismiss() }
+                Button("保存") {
                     onSave(draft)
                     dismiss()
                 }

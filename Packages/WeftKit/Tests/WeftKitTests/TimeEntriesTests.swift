@@ -6,6 +6,7 @@ import Testing
 private final class DescribingAI: AIClassifying, @unchecked Sendable {
     private let lock = NSLock()
     private var _prompts: [String] = []
+    var failFirst = false
     var prompts: [String] { lock.withLock { _prompts } }
 
     func availability() -> AIAvailability { .available }
@@ -14,7 +15,8 @@ private final class DescribingAI: AIClassifying, @unchecked Sendable {
     }
     func summarize(_ facts: String) async throws -> String { "" }
     func describeActivity(_ facts: String, language: String) async throws -> String {
-        lock.withLock { _prompts.append(facts) }
+        let count = lock.withLock { _prompts.append(facts); return _prompts.count }
+        if failFirst && count == 1 { throw URLError(.timedOut) }
         return "Worked on Weft."
     }
 }
@@ -105,4 +107,22 @@ struct TimeEntriesTests {
         let reloaded = TimeEntryService(modelContext: container.mainContext, ai: ai)
         #expect(reloaded.description(for: entries[0]) == "Worked on Weft.")
     }
+    @Test @MainActor func failedDescriptionsRecoverAfterCooldown() async throws {
+        let container = try WeftSchema.makeContainer(inMemory: true)
+        let ai = DescribingAI()
+        ai.failFirst = true
+        let service = TimeEntryService(modelContext: container.mainContext, ai: ai)
+        let entry = TimeEntries.build([seg(0, 20, "xcode")])[0]
+        service.describe([entry], now: .now)
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(service.description(for: entry) == nil)
+        service.describe([entry], now: .now)
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(ai.prompts.count == 1)
+        service.describe([entry], now: Date.now.addingTimeInterval(301))
+        for _ in 0..<100 where service.description(for: entry) == nil { try await Task.sleep(for: .milliseconds(10)) }
+        #expect(service.description(for: entry) == "Worked on Weft.")
+        #expect(ai.prompts.count == 2)
+    }
+
 }

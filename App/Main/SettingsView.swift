@@ -9,12 +9,12 @@ struct SettingsView: View {
 
     var body: some View {
         TabView {
-            Tab("General", systemImage: "gearshape") { GeneralSettings() }
-            Tab("Model", systemImage: "sparkles") { ModelSettings() }
-            Tab("Tracking", systemImage: "record.circle") { TrackingSettings() }
-            Tab("Sessions", systemImage: "timer") { SessionSettings() }
-            Tab("Blocker", systemImage: "hand.raised") { BlockerSettings() }
-            Tab("Data", systemImage: "externaldrive") { DataSettings() }
+            Tab("通用", systemImage: "gearshape") { GeneralSettings() }
+            Tab("模型", systemImage: "sparkles") { ModelSettings() }
+            Tab("活动记录", systemImage: "record.circle") { TrackingSettings() }
+            Tab("计时会话", systemImage: "timer") { SessionSettings() }
+            Tab("分心提醒", systemImage: "hand.raised") { BlockerSettings() }
+            Tab("数据", systemImage: "externaldrive") { DataSettings() }
         }
         .frame(width: 560)
         .frame(minHeight: 460)
@@ -32,30 +32,30 @@ private struct GeneralSettings: View {
         @Bindable var prefs = model.preferences
         Form {
             Section {
-                Toggle("Launch Weft at login", isOn: $launchAtLogin)
+                Toggle("登录时启动 Weft", isOn: $launchAtLogin)
                     .onChange(of: launchAtLogin) { _, enabled in LaunchAtLogin.set(enabled) }
-                Toggle("Pause tracking", isOn: $prefs.trackingPaused)
+                Toggle("暂停记录", isOn: $prefs.trackingPaused)
             }
-            Section("Work hours") {
-                Picker("Daily target", selection: $prefs.workHoursTarget) {
+            Section("工作时间") {
+                Picker("每日目标", selection: $prefs.workHoursTarget) {
                     ForEach([4.0, 5, 6, 7, 7.5, 8, 8.5, 9, 10, 12], id: \.self) { hours in
                         Text(Format.duration(hours * 3600)).tag(hours)
                     }
                 }
-                Toggle("Notify when I reach the target and when I'm overworking", isOn: $prefs.workHoursNotifications)
+                Toggle("达到目标或工作过久时提醒", isOn: $prefs.workHoursNotifications)
             }
-            Section("Permissions") {
+            Section("权限") {
                 PermissionRow(
-                    title: "Accessibility",
-                    detail: "Needed to read window titles.",
+                    title: "辅助功能",
+                    detail: "用于读取当前窗口标题。",
                     granted: model.accessibilityGranted,
                     action: { SystemProbe.requestAccessibility(); SystemSettings.openAccessibility() }
                 )
                 LabeledContent {
-                    Button("Open Settings") { SystemSettings.openAutomation() }
+                    Button("打开设置") { SystemSettings.openAutomation() }
                 } label: {
-                    Text("Browsers")
-                    Text("Each browser asks once whether Weft may read the active tab's URL.")
+                    Text("浏览器")
+                    Text("每个浏览器首次使用时会请求读取当前标签页网址的权限。")
                 }
             }
         }
@@ -72,9 +72,9 @@ struct PermissionRow: View {
     var body: some View {
         LabeledContent {
             if granted {
-                Label("Granted", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+                Label("已授权", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
             } else {
-                Button("Grant Access", action: action)
+                Button("授予权限", action: action)
             }
         } label: {
             Text(title)
@@ -96,76 +96,85 @@ private struct ModelSettings: View {
     @State private var isChecking = false
     /// Bumped to check the server again.
     @State private var checks = 0
+    @State private var saveError: String?
 
     var body: some View {
         @Bindable var prefs = model.preferences
         Form {
             Section {
-                Picker("Categorize with", selection: $prefs.modelProvider) {
+                Picker("分类与总结模型", selection: $prefs.modelProvider) {
                     Text("Apple Intelligence").tag(ModelProvider.appleIntelligence)
-                    Text("OpenAI-compatible API").tag(ModelProvider.openAICompatible)
+                    Text("OpenAI 兼容接口").tag(ModelProvider.openAICompatible)
                 }
                 LabeledContent {
                     switch (model.classifier.aiAvailability, prefs.modelProvider) {
                     case (.available, .appleIntelligence):
-                        Label("Ready", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+                        Label("已就绪", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
                     case (.unavailable, .appleIntelligence):
-                        Button("Open Settings") { SystemSettings.openAppleIntelligence() }
+                        Button("打开设置") { SystemSettings.openAppleIntelligence() }
                     case (.unavailable, .openAICompatible):
-                        Label("Not set up", systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                        Label("尚未配置", systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)
                     case (.available, .openAICompatible):
                         if isChecking {
                             ProgressView().controlSize(.small)
                         } else if case .success = check {
-                            Label("Connected", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+                            Label("连接成功", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
                         } else if case .failure = check {
-                            Label("Can't connect", systemImage: "xmark.octagon.fill").foregroundStyle(.red)
+                            Label("连接失败", systemImage: "xmark.octagon.fill").foregroundStyle(.red)
                         }
                     }
                 } label: {
-                    Text("Status")
+                    Text("状态")
                     switch (model.classifier.aiAvailability, prefs.modelProvider) {
                     case (.available, .appleIntelligence):
-                        Text("Runs on this Mac.")
+                        Text("在此 Mac 上本地运行。")
                     case (.unavailable(let reason), _):
-                        Text("\(reason) Until a model is available, Weft guesses from each app's App Store category and each site's name.")
+                        Text("\(reason) 模型不可用时，Weft 仍可使用规则与启发式分类。")
                     case (.available, .openAICompatible):
                         switch check {
-                        case _ where isChecking: Text("Checking \(host)…")
-                        case .success(let category)?: Text("Requests go to \(host), which put Xcode in \(category).")
-                        case .failure(let error)?: Text("\(error.localizedDescription) Until it answers, Weft guesses instead.")
-                        case nil: Text("Requests go to \(host).")
+                        case _ where isChecking: Text("正在测试 \(host)…")
+                        case .success(let category)?: Text("已连接 \(host)，测试分类结果：Xcode → \(category)。")
+                        case .failure(let error)?: Text("\(error.localizedDescription) 接口恢复前使用规则和启发式分类。")
+                        case nil: Text("请求发送至 \(host).")
                         }
                     }
                 }
             } footer: {
-                Text("The model categorizes apps and sites no rule knows, describes your work streams and writes daily reviews.")
+                Text("模型用于未知应用和网站的分类、活动描述以及每日回顾。")
                     .font(.callout).foregroundStyle(.secondary)
             }
             if prefs.modelProvider == .openAICompatible {
                 Section {
                     TextField("Base URL", text: $baseURL, prompt: Text(RemoteModelConfig.defaultBaseURL))
-                    TextField("Model", text: $modelName, prompt: Text("gpt-5-mini"))
-                    SecureField("API key", text: $apiKey, prompt: Text("Not needed for local servers"))
+                    TextField("模型", text: $modelName, prompt: Text("gpt-5-mini"))
+                    SecureField("API Key", text: $apiKey, prompt: Text("本地服务可不填写"))
                     HStack {
                         Spacer()
-                        Button("Save", action: save).disabled(isChecking)
+                        Button("保存并连接", action: save).disabled(isChecking)
+                        Button("测试已保存的配置") { checks += 1 }.disabled(isChecking || prefs.remoteModel.isEmpty)
+                        Button("重试待处理活动") {
+                            model.classifier.retryPending()
+                            model.timeEntries.retryFailed()
+                        }.disabled(isChecking || prefs.remoteModel.isEmpty)
                     }
                 } header: {
-                    Text("Server")
+                    Text("模型服务器")
                 } footer: {
-                    Text("Works with OpenAI and any server with a compatible Chat Completions API, such as OpenRouter, DeepSeek, Ollama or LM Studio. Weft sends it the apps and sites it doesn't know with their window titles, the apps, sites and window titles behind each work stream, and your daily totals. The API key is kept in your keychain.")
+                    Text("支持 OpenAI、OpenRouter、DeepSeek、Ollama、LM Studio 等 Chat Completions 兼容接口。保存并启用后，未知应用和网站、窗口标题、活动片段及每日统计会发送至你配置的服务。API Key 保存在系统钥匙串中。")
                         .font(.callout).foregroundStyle(.secondary)
                 }
             }
         }
         .formStyle(.grouped)
         .onAppear(perform: loadServer)
-        .task(id: checks) { await checkServer() }
+        .alert("保存失败", isPresented: Binding(get: { saveError != nil }, set: { if !$0 { saveError = nil } })) {
+            Button("好") { saveError = nil }
+        } message: { Text(saveError ?? "") }
+        .task(id: checks) { if checks > 0 { await checkServer() } }
         .onChange(of: prefs.modelProvider) {
             model.applyModelChoice()
             loadServer()
-            checks += 1
+            check = nil
         }
     }
 
@@ -184,9 +193,15 @@ private struct ModelSettings: View {
 
     /// Saves the server, switches to it and checks that it answers.
     private func save() {
+        let config = RemoteModelConfig(baseURL: baseURL, model: modelName, apiKey: apiKey)
+        guard config.endpoint != nil, !modelName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            saveError = "请填写有效的 HTTP(S) 接口地址和模型名称。"
+            return
+        }
+        do { try Keychain.set(apiKey.trimmingCharacters(in: .whitespacesAndNewlines), for: AppModel.apiKeyAccount) }
+        catch { saveError = error.localizedDescription; return }
         model.preferences.remoteBaseURL = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
         model.preferences.remoteModel = modelName.trimmingCharacters(in: .whitespacesAndNewlines)
-        Keychain.set(apiKey.trimmingCharacters(in: .whitespacesAndNewlines), for: AppModel.apiKeyAccount)
         model.applyModelChoice()
         checks += 1
     }
@@ -224,16 +239,16 @@ private struct TrackingSettings: View {
         @Bindable var prefs = model.preferences
         Form {
             Section {
-                Picker("Count as away after", selection: $prefs.idleThresholdMinutes) {
-                    ForEach([1, 2, 3, 5, 10, 15, 30], id: \.self) { Text("\($0) min without input").tag($0) }
+                Picker("无操作后视为离开", selection: $prefs.idleThresholdMinutes) {
+                    ForEach([1, 2, 3, 5, 10, 15, 30], id: \.self) { Text("\($0) 分钟无操作").tag($0) }
                 }
             } footer: {
-                Text("Meetings and video calls are never counted as away.")
+                Text("会议和视频通话不会因无操作而被视为离开。")
                     .font(.callout).foregroundStyle(.secondary)
             }
-            Section("Privacy") {
-                Toggle("Don't record window titles", isOn: $prefs.stripTitles)
-                Toggle("Only record the domain of URLs", isOn: $prefs.urlHostOnly)
+            Section("隐私") {
+                Toggle("不记录窗口标题", isOn: $prefs.stripTitles)
+                Toggle("网址仅记录域名", isOn: $prefs.urlHostOnly)
             }
             Section {
                 ForEach(prefs.excludedBundleIDs, id: \.self) { bundleID in
@@ -247,9 +262,9 @@ private struct TrackingSettings: View {
                     prefs.excludedBundleIDs.append(bundleID)
                 }
             } header: {
-                Text("Never track these apps")
+                Text("不记录以下应用")
             }
-            Section("Never track these websites") {
+            Section("不记录以下网站") {
                 ForEach(prefs.excludedDomains, id: \.self) { domain in
                     RemovableRow {
                         Label(domain, systemImage: "globe")
@@ -258,10 +273,10 @@ private struct TrackingSettings: View {
                     }
                 }
                 HStack {
-                    TextField("Domain", text: $newDomain, prompt: Text("bank.example.com"))
+                    TextField("域名", text: $newDomain, prompt: Text("bank.example.com"))
                         .labelsHidden()
                         .onSubmit(addDomain)
-                    Button("Add", action: addDomain)
+                    Button("添加", action: addDomain)
                         .disabled(newDomain.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
             }
@@ -290,7 +305,7 @@ private struct AppPicker: View {
                 .compactMap { app in app.bundleIdentifier.map { ($0, app.localizedName ?? $0) } }
                 .filter { !excluding.contains($0.0) && $0.0 != Bundle.main.bundleIdentifier }
                 .sorted { $0.1.localizedCaseInsensitiveCompare($1.1) == .orderedAscending }
-            Section("Running apps") {
+            Section("正在运行的应用") {
                 ForEach(running, id: \.0) { bundleID, name in
                     Button {
                         onPick(bundleID)
@@ -357,22 +372,22 @@ private struct SessionSettings: View {
     var body: some View {
         @Bindable var prefs = model.preferences
         Form {
-            Section("Default durations") {
-                durationPicker("Focus", $prefs.defaultFocusMinutes, options: [15, 20, 25, 30, 45, 50, 60, 90, 120])
-                durationPicker("Meeting", $prefs.defaultMeetingMinutes, options: [15, 20, 25, 30, 45, 60, 90, 120])
-                durationPicker("Break", $prefs.defaultBreakMinutes, options: [1, 3, 5, 10, 15, 20, 30])
-                Toggle("Show breaks full screen", isOn: $prefs.fullScreenBreak)
+            Section("默认时长") {
+                durationPicker("专注", $prefs.defaultFocusMinutes, options: [15, 20, 25, 30, 45, 50, 60, 90, 120])
+                durationPicker("会议", $prefs.defaultMeetingMinutes, options: [15, 20, 25, 30, 45, 60, 90, 120])
+                durationPicker("休息", $prefs.defaultBreakMinutes, options: [1, 3, 5, 10, 15, 20, 30])
+                Toggle("全屏显示休息", isOn: $prefs.fullScreenBreak)
             }
             Section {
-                Toggle("Remind me to take breaks", isOn: $prefs.breakRemindersEnabled)
-                durationPicker("After working for", $prefs.breakReminderMinutes, options: [20, 30, 45, 60, 75, 90, 120])
+                Toggle("提醒我休息", isOn: $prefs.breakRemindersEnabled)
+                durationPicker("连续工作时长", $prefs.breakReminderMinutes, options: [20, 30, 45, 60, 75, 90, 120])
                     .disabled(!prefs.breakRemindersEnabled)
-                durationPicker("Snooze for", $prefs.snoozeMinutes, options: [5, 10, 15, 20, 30])
+                durationPicker("稍后提醒间隔", $prefs.snoozeMinutes, options: [5, 10, 15, 20, 30])
                     .disabled(!prefs.breakRemindersEnabled)
             } header: {
-                Text("Break reminders")
+                Text("休息提醒")
             } footer: {
-                Text("Only active time counts; stepping away from the keyboard resets the timer.")
+                Text("只计算活跃时间；离开后重置连续工作计时。")
                     .font(.callout).foregroundStyle(.secondary)
             }
         }
@@ -397,26 +412,26 @@ private struct BlockerSettings: View {
         @Bindable var prefs = model.preferences
         Form {
             Section {
-                Toggle("Block distractions during focus sessions", isOn: $prefs.blockerEnabled)
-                Picker("Style", selection: $prefs.blockerStyle) {
-                    Text("Full-screen overlay").tag(BlockerStyle.overlay)
-                    Text("Notification").tag(BlockerStyle.notification)
+                Toggle("专注期间提醒分心", isOn: $prefs.blockerEnabled)
+                Picker("提示方式", selection: $prefs.blockerStyle) {
+                    Text("全屏提醒").tag(BlockerStyle.overlay)
+                    Text("通知").tag(BlockerStyle.notification)
                 }
                 .pickerStyle(.segmented)
                 .disabled(!prefs.blockerEnabled)
-                Picker("Interrupt after", selection: $prefs.refocusThresholdSeconds) {
+                Picker("停留多久后提醒", selection: $prefs.refocusThresholdSeconds) {
                     ForEach(Array(Set([0, 5, 10, 15, 30, 60, prefs.refocusThresholdSeconds])).sorted(), id: \.self) { seconds in
-                        Text(seconds == 0 ? "Immediately" : "\(seconds) seconds").tag(seconds)
+                        Text(seconds == 0 ? "立即" : "\(seconds) 秒").tag(seconds)
                     }
                 }
                 .disabled(!prefs.blockerEnabled)
             } footer: {
-                Text("Categories marked as distracting trigger the blocker. Change them under Categories.")
+                Text("被标记为分心的分类会触发提醒，可在“分类”中调整。")
                     .font(.callout).foregroundStyle(.secondary)
             }
-            Section("Never block") {
+            Section("不提醒以下活动") {
                 if prefs.blockerAllowList.isEmpty {
-                    Text("Apps and sites you mark as “not a distraction” appear here.")
+                    Text("标记为“不算分心”的应用和网站会显示在这里。")
                         .foregroundStyle(.secondary)
                 }
                 ForEach(prefs.blockerAllowList, id: \.self) { key in
@@ -459,7 +474,7 @@ private struct DataSettings: View {
         Form {
             Section {
                 LabeledContent {
-                    Button("Export CSV…", action: exportCSV)
+                    Button("导出 CSV…", action: exportCSV)
                 } label: {
                     Text("Export all activity")
                     Text("Every tracked entry with app, title, URL and category.")

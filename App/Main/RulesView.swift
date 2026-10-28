@@ -53,7 +53,7 @@ struct RulesView: View {
             }
         }
         .formStyle(.grouped)
-        .navigationTitle("Rules")
+        .navigationTitle("规则")
     }
 
     private func add() {
@@ -64,7 +64,7 @@ struct RulesView: View {
     static func label(for field: RuleField) -> String {
         switch field {
         case .bundleID: "App bundle ID"
-        case .domain: "Domain"
+        case .domain: "域名"
         case .titleContains: "Title contains"
         case .urlContains: "URL contains"
         }

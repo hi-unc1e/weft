@@ -6,7 +6,7 @@ import Testing
 /// Opt in with `WEFT_AI_TESTS=1 swift test --filter FoundationModelsHarness`.
 @Suite(.enabled(if: ProcessInfo.processInfo.environment["WEFT_AI_TESTS"] != nil))
 struct FoundationModelsHarness {
-    let classifier = FoundationModelsClassifier()
+    let classifier = LocalModel.make()
 
     static let cases: [(ActivityContext, Set<String>)] = [
         (ActivityContext(bundleID: "com.apple.Safari", appName: "Safari", title: "The Rust Programming Language - Ownership",
