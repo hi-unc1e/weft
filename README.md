@@ -8,6 +8,17 @@ This fork targets macOS 15+ and supports user-configured OpenAI-compatible model
 > 远程配置保存并启用后，相关活动信息会发送到配置的服务商；API Key 仅存系统钥匙串。临时错误最多尝试 3 次，活动摘要失败后冷却 5 分钟再补齐，也可手动重试。
 > 本地构建采用临时签名，未公证；重新构建后可能需要重新授权辅助功能。
 
+## 项目识别（本地 Magpie）
+
+侧边栏「项目」展示项目名称、工作目录、AI 请求数、会话主题和可明确归属的前台时长。支持今天和最近 7 天，展开项目可查看对应的活动记录。HaloCam 的平台子目录合并展示。
+
+- 从本机 Magpie 的只读用量接口读取最近请求，再按会话 ID 关联 Codex / Claude 本地会话的工作目录和现有标题。若有 Tokei，也读取它现有缓存清单中的项目映射，补充其他工具及请求样本外的目录候选。不会执行 Tokei 脚本、调用模型或上传会话正文。
+- 项目是独立维度，Code 等活动分类继续保留。窗口标题、网址中的项目路径、项目名或明确的会话主题用于归属；多项目冲突、缺少证据时保留为待归属。
+- 后台 AI 请求不折算为你的工作时长。请求样本最多 2,000 条，繁忙时不足完整 7 天；无法关联的请求单独计数。辅助功能未授权或停止记录窗口标题时，前台归属覆盖率会降低。
+- 约 5 分钟自动刷新，也可手动刷新。关闭「读取本地 Magpie」可暂停读取并清空当前内存结果；网关离线时保留上一次结果并提示错误。
+
+接口依据：[Magpie reference — Usage API](https://github.com/yetone/magpie/blob/main/docs/reference.md)。默认仅连接 `127.0.0.1:3425`；本机只读用量接口无需将网关密钥写入代码。
+
 # Weft
 
 **See where your day actually went, without sending it anywhere.**

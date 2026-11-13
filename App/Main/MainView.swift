@@ -36,6 +36,7 @@ struct MainView: View {
         } detail: {
             switch model.page {
             case .today: DayView()
+            case .projects: ProjectsView()
             case .reports: ReportsView()
             case .review: ReviewView()
             case .categories: CategoriesView()

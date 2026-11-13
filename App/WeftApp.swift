@@ -64,7 +64,7 @@ private struct MenuBarLabel: View {
 ///
 ///     weft://focus?minutes=50   weft://meeting   weft://break
 ///     weft://stop               weft://pause     weft://resume
-///     weft://dashboard
+///     weft://dashboard          weft://projects
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let model = AppModel()
@@ -87,6 +87,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case "resume": model.preferences.trackingPaused = false
         case "dashboard":
             model.showDay()
+            model.openDashboard?()
+        case "projects":
+            model.page = .projects
             model.openDashboard?()
         default: break
         }

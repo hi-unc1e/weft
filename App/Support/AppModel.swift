@@ -4,13 +4,14 @@ import WeftKit
 import SwiftData
 
 enum Page: String, CaseIterable, Identifiable {
-    case today, reports, review, categories, rules
+    case today, projects, reports, review, categories, rules
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
         case .today: "今天"
+        case .projects: "项目"
         case .reports: "统计报告"
         case .review: "待确认"
         case .categories: "分类"
@@ -21,6 +22,7 @@ enum Page: String, CaseIterable, Identifiable {
     var symbol: String {
         switch self {
         case .today: "clock"
+        case .projects: "folder"
         case .reports: "chart.bar.xaxis"
         case .review: "questionmark.bubble"
         case .categories: "square.grid.2x2"
@@ -41,6 +43,7 @@ final class AppModel {
     let sessions: SessionEngine
     let distractionGuard: DistractionGuard
     let timeEntries: TimeEntryService
+    let projects = ProjectStore()
 
     var page: Page = .today
     /// The day the Today page shows; Reports sets it to drill into a day.
@@ -85,6 +88,7 @@ final class AppModel {
                 try? await Task.sleep(for: .seconds(30))
                 self?.timeEntries.describeToday()
                 self?.classifier.retryPending()
+                await self?.projects.refresh()
                 try? await Task.sleep(for: .seconds(270))
             }
         }
