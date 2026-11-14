@@ -5,6 +5,22 @@ import Testing
 struct ProjectAttributionTests {
     let start = Date(timeIntervalSince1970: 1_700_000_000)
 
+    @Test func completeSummaryOverridesTruncatedSamplesAndIncludesMissingSessions() {
+        let stats = [
+            ProjectSessionStats(count: 3000, projectPath: "/work/halo-cam", sessionID: "a", title: "相机完整会话标题"),
+            ProjectSessionStats(count: 123, projectPath: "/work/HaloCam-Android", sessionID: "b"),
+            ProjectSessionStats(count: 10, projectPath: nil, sessionID: "unknown")
+        ]
+        let report = ProjectReport.build(activities: [], requests: [], interval: DateInterval(start: start, end: start + 120),
+                                         sessionStats: stats, requestsWithoutSession: 20)
+        #expect(report.projects.count == 1)
+        #expect(report.projects[0].requests == 3123)
+        #expect(report.projects[0].sessions == 2)
+        #expect(report.projects[0].measuredActiveTime == nil)
+        #expect(report.projects[0].project.sessionTitles == ["相机完整会话标题"])
+        #expect(report.unresolvedRequests == 30)
+    }
+
     @Test func haloCheckoutsAndWorktreesAreOneProject() {
         let projects = TrackedProject.catalog(paths: ["/work/halo-cam", "/work/HaloCam-Android", "/work/halo-cam/.worktrees/fix"])
         #expect(projects.count == 1)
@@ -44,6 +60,7 @@ struct ProjectAttributionTests {
                                          requests: requests, interval: DateInterval(start: start, end: start + 120))
         #expect(report.projects.first?.requests == 1)
         #expect(report.projects.first?.activeTime == 0)
+        #expect(report.projects.first?.measuredActiveTime == nil)
         #expect(report.unattributedTime == 60)
     }
 
@@ -74,6 +91,7 @@ struct ProjectAttributionTests {
         let report = ProjectReport.build(activities: [ProjectActivity(start: start - 60, end: start + 180, title: "halo-cam — Xcode")],
                                          requests: requests, interval: DateInterval(start: start, end: start + 120))
         #expect(report.projects.first?.activeTime == 120)
+        #expect(report.projects.first?.measuredActiveTime == 120)
         #expect(report.projects.first?.requests == 2)
         #expect(report.projects.first?.sessions == 1)
         #expect(report.unresolvedRequests == 1)

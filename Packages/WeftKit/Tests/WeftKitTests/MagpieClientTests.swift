@@ -38,7 +38,12 @@ struct MagpieClientTests {
         try Data(value.utf8).write(to: url)
     }
     private func client(_ root: URL, reply: @escaping @Sendable (URLRequest) -> (Int, Data)) -> MagpieClient {
-        MagpieStub.state.withLock { $0 = .init(reply: reply) }
+        MagpieStub.state.withLock { $0 = .init(reply: { request in
+            if request.url!.path.hasSuffix("/usage") {
+                return (200, Data(#"{"period":"7d","since":"2027-01-09T00:00:00+08:00","calls":2001,"sessionCount":0,"sessions":[]}"#.utf8))
+            }
+            return reply(request)
+        }) }
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [MagpieStub.self]
         let date = date
@@ -79,7 +84,7 @@ struct MagpieClientTests {
         #expect(URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems?.contains(URLQueryItem(name: "period", value: "7d")) == true)
     }
 
-    @Test func boundedPaginationAndTruncation() async throws {
+    @Test func boundedSampleIsNotUsedAsTotal() async throws {
         let root = try root()
         defer { try? FileManager.default.removeItem(at: root) }
         let timestamp = date.addingTimeInterval(-1).ISO8601Format()
@@ -89,10 +94,10 @@ struct MagpieClientTests {
             return (200, Self.page(rows: (0..<200).map { _ in ["t": timestamp, "agent": "test", "ms": 1] }, total: 2001, offset: offset))
         }
         let result = try await client.requestsWithMetadata()
-        #expect(result.requests.count == 2000)
+        #expect(result.requests.count == 200)
         #expect(result.isTruncated)
         #expect(result.totalAvailable == 2001)
-        #expect(MagpieStub.state.withLock { $0.requests.count } == 10)
+        #expect(MagpieStub.state.withLock { $0.requests.count } == 2)
     }
 
     @Test func rejectsErrorsMalformedDatesAndIgnoredOffset() async throws {
@@ -140,14 +145,116 @@ struct MagpieClientTests {
         #expect(await index.snapshot().lookup("recent")?.title == "Newest title")
     }
 
+    @Test func completeSummaryBeyondSampleAndCalendarPeriods() async throws {
+        let root = try root()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write(#"{"type":"session_meta","payload":{"id":"halo","cwd":"/sample/halo-cam"}}"# + "\n", to: root.appendingPathComponent("codex/session.jsonl"))
+        let client = client(root) { _ in (500, Data()) }
+        MagpieStub.state.withLock { $0.reply = { request in
+            let period = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!.queryItems!.first { $0.name == "period" }!.value!
+            if request.url!.path.hasSuffix("/usage") {
+                let today = period == "today"
+                return (200, try! JSONSerialization.data(withJSONObject: [
+                    "period": period, "since": today ? "2027-01-15T00:00:00+08:00" : "2027-01-09T00:00:00+08:00",
+                    "calls": today ? 100 : 9000, "sessionCount": 3,
+                    "sessions": [["id": "halo", "agent": "codex", "calls": today ? 18 : 4998],
+                                 ["id": "halo", "agent": "claude", "calls": 2],
+                                 ["id": "unknown", "calls": 10]]
+                ]))
+            }
+            // Same route twice is an overlapping/update duplicate; equal timestamps alone are not.
+            return (200, Self.page(rows: [1, 1, 2].map {
+                ["route_id": $0, "t": "2027-01-15T01:00:00+08:00", "agent": "test", "ms": 1]
+            }, total: 9100, offset: 0))
+        } }
+        for days in [1, 7] {
+            let batch = try await client.requestsWithMetadata(days: days)
+            #expect(batch.period == (days == 1 ? "today" : "7d"))
+            #expect(batch.since.ISO8601Format() == (days == 1 ? "2027-01-14T16:00:00Z" : "2027-01-08T16:00:00Z"))
+            #expect(batch.requests.count == 2)
+            #expect(batch.requests.allSatisfy { $0.projectPath == nil && $0.sessionID == nil })
+            #expect(batch.totalRequests == (days == 1 ? 100 : 9000))
+            #expect(batch.associatedRequests == (days == 1 ? 20 : 5000))
+            #expect(batch.requestsWithoutSession == (days == 1 ? 70 : 3990))
+            #expect(batch.totalSessions == 2)
+            #expect(batch.summarySessionCount == 3)
+            #expect(batch.sessionStats.first { $0.sessionID == "unknown" }?.projectPath == nil)
+            #expect(batch.isTruncated)
+        }
+    }
+
+    @Test func callsIncludeFailuresWithoutAddingErrorsAgain() async throws {
+        let root = try root()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write(#"{"type":"session_meta","payload":{"id":"halo","cwd":"/sample/halo-cam"}}"# + "\n", to: root.appendingPathComponent("codex/session.jsonl"))
+        let client = client(root) { _ in (500, Data()) }
+        for statuses in [[200, 500, 502], [503]] {
+            let calls = statuses.count
+            let errors = statuses.filter { $0 >= 400 }.count
+            let summary = try JSONSerialization.data(withJSONObject: [
+                "period": "7d", "since": "2027-01-09T00:00:00+08:00",
+                "calls": calls, "errors": errors, "sessionCount": 1,
+                "sessions": [["id": "halo", "agent": "codex", "calls": calls, "errors": errors]]
+            ])
+            let page = Self.page(rows: statuses.enumerated().map { i, status in
+                ["route_id": i, "t": "2027-01-15T01:00:00+08:00", "agent": "codex",
+                 "session": "halo", "ms": 1, "status": status]
+            }, total: calls, offset: 0)
+            MagpieStub.state.withLock { $0.reply = { request in
+                (200, request.url!.path.hasSuffix("/usage") ? summary : page)
+            } }
+            let batch = try await client.requestsWithMetadata()
+            #expect(batch.totalRequests == calls)
+            #expect(batch.sessionStats.first?.count == calls)
+            #expect(batch.associatedRequests == calls)
+            #expect(batch.requests.count == calls)
+            #expect(batch.requestsWithoutSession == 0)
+        }
+    }
+
+    @Test func rejectsIncompleteOrDuplicateSummary() async throws {
+        let root = try root()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let client = client(root) { _ in (500, Data()) }
+        for sessions in ["[]", #"[{"id":"a","calls":1},{"id":"a","calls":1}]"#,
+                         #"[{"id":"a","calls":9},{"id":"b","calls":9}]"#] {
+            let body = Data("{\"period\":\"7d\",\"since\":\"2027-01-09T00:00:00+08:00\",\"calls\":10,\"sessionCount\":2,\"sessions\":\(sessions)}".utf8)
+            MagpieStub.state.withLock { $0.reply = { _ in (200, body) } }
+            await #expect(throws: MagpieClient.ClientError.self) { try await client.requestsWithMetadata() }
+        }
+    }
+
     @Test(.enabled(if: ProcessInfo.processInfo.environment["WEFT_MAGPIE_TESTS"] == "1"))
     func liveLoopbackMetadataCoverage() async throws {
-        let result = try await MagpieClient().requestsWithMetadata()
-        #expect(!result.requests.isEmpty)
-        #expect(result.requests.count <= 2000)
-        let mapped = result.requests.filter { $0.projectPath != nil }
-        let halo = mapped.filter { $0.projectPath!.lowercased().contains("halo-cam") }
-        print("Magpie rows=\(result.requests.count) mapped=\(mapped.count) titled=\(result.requests.filter { $0.sessionTitle != nil }.count) HaloCam=\(halo.count) truncated=\(result.isTruncated)")
-        #expect(!mapped.isEmpty)
+        // Freeze the two real API responses so concurrent new traffic cannot invalidate equality.
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let base = URL(string: "http://127.0.0.1:3425/v1/magpie/usage")!
+        for days in [1, 7] {
+            let period = days == 1 ? "today" : "7d"
+            let (summary, _) = try await URLSession(configuration: .ephemeral).data(from: URL(string: base.absoluteString + "?period=" + period)!)
+            let (page, _) = try await URLSession(configuration: .ephemeral).data(from: URL(string: base.absoluteString + "/requests?limit=200&period=" + period)!)
+            MagpieStub.state.withLock { $0 = .init(reply: { request in
+                (200, request.url!.path.hasSuffix("/usage") ? summary : page)
+            }) }
+            let config = URLSessionConfiguration.ephemeral
+            config.protocolClasses = [MagpieStub.self]
+            let client = MagpieClient(endpoint: base.appendingPathComponent("requests"),
+                session: URLSession(configuration: config), codexRoot: home.appendingPathComponent(".codex/sessions"),
+                claudeRoot: home.appendingPathComponent(".claude/projects"),
+                titleIndex: home.appendingPathComponent(".codex/session_index.jsonl"),
+                tokeiDirectory: home.appendingPathComponent(".tokei/cache/scan_cache.d"))
+            let batch = try await client.requestsWithMetadata(days: days)
+            let raw = try #require(JSONSerialization.jsonObject(with: summary) as? [String: Any])
+            let sessions = try #require(raw["sessions"] as? [[String: Any]])
+            let expected = Dictionary(sessions.map { ($0["id"] as! String, $0["calls"] as! Int) }, uniquingKeysWith: +)
+            #expect(batch.totalRequests == raw["calls"] as? Int)
+            #expect(batch.summarySessionCount == raw["sessionCount"] as? Int)
+            #expect(batch.totalSessions == expected.count)
+            #expect(Dictionary(uniqueKeysWithValues: batch.sessionStats.map { ($0.sessionID, $0.count) }) == expected)
+            let halo = batch.sessionStats.filter { $0.projectPath?.lowercased().contains("halo-cam") == true }
+            #expect(!halo.isEmpty)
+            #expect(halo.reduce(0) { $0 + $1.count } == halo.reduce(0) { $0 + expected[$1.sessionID]! })
+            print("Magpie \(period): total=\(batch.totalRequests), sessions=\(batch.totalSessions), associated=\(batch.associatedRequests), noSession=\(batch.requestsWithoutSession), HaloCam sessions=\(halo.count) calls=\(halo.reduce(0) { $0 + $1.count }), sample=\(batch.requests.count)")
+        }
     }
 }

@@ -100,7 +100,7 @@ final class AppModel {
             breakReminder.handle(sample)
             workHours.handle(sample)
             distractionGuard.handle(sample)
-            if !accessibilityGranted, SystemProbe.isAccessibilityTrusted { accessibilityGranted = true }
+            accessibilityGranted = SystemProbe.isAccessibilityTrusted
         }
 
         sessions.onStart = { [weak self] session in

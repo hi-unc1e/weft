@@ -21,12 +21,43 @@ public struct ProjectRequest: Sendable {
 }
 
 
+/// Complete per-session counts from the summary, never extrapolated from request samples.
+public struct ProjectSessionStats: Sendable {
+    /// Summary calls includes failures; errors is a subset and must never be added.
+    public let count: Int
+    public let projectPath: String?
+    public let sessionID: String
+    public let title: String?
+
+    public init(count: Int, projectPath: String?, sessionID: String, title: String? = nil) {
+        self.count = count
+        self.projectPath = projectPath
+        self.sessionID = sessionID
+        self.title = title
+    }
+}
+
 public struct MagpieClient: Sendable {
     public struct Batch: Sendable {
         public let requests: [ProjectRequest]
         public let isTruncated: Bool
         public let totalAvailable: Int
         public let projectPaths: [String]
+        public let sessionStats: [ProjectSessionStats]
+        /// Raw server groups (a session ID may appear under more than one agent).
+        public let summarySessionCount: Int
+        public let period: String
+        /// Exact server boundary (including its timezone): today midnight or six midnights ago.
+        public let since: Date
+        /// Complete summary calls, including requests without a session or project.
+        public var totalRequests: Int { totalAvailable }
+        public var totalSessions: Int { sessionStats.count }
+        public var associatedRequests: Int {
+            sessionStats.filter { $0.projectPath != nil }.reduce(0) { $0 + $1.count }
+        }
+        public var requestsWithoutSession: Int {
+            totalRequests - sessionStats.reduce(0) { $0 + $1.count }
+        }
     }
 
     public enum ClientError: Error, Sendable {
@@ -72,49 +103,47 @@ public struct MagpieClient: Sendable {
         try await requestsWithMetadata().requests
     }
 
-    /// At most 2,000 API rows; retain this client between refreshes to reuse the metadata cache.
-    public func requestsWithMetadata() async throws -> Batch {
-        let end = now()
-        let start = end.addingTimeInterval(-7 * 24 * 60 * 60)
+    /// `requests` is a single-page detail sample; all statistics MUST use sessionStats/totalRequests.
+    /// Magpie periods are calendar days: 7d starts six midnights ago, today at local midnight.
+    /// Fetching one page avoids unstable offset pagination as new requests arrive.
+    public func requestsWithMetadata(days: Int = 7) async throws -> Batch {
+        guard days == 1 || days == 7 else { throw ClientError.invalidResponse }
+        let period = days == 1 ? "today" : "7d"
         let fractional = ISO8601DateFormatter()
         fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         let plain = ISO8601DateFormatter()
+        func date(_ value: String) -> Date? { fractional.date(from: value) ?? plain.date(from: value) }
+        let summary: Summary = try await fetch(endpoint.deletingLastPathComponent(), query: [
+            URLQueryItem(name: "period", value: period)
+        ])
+        guard summary.period == period, let start = date(summary.since), summary.calls >= 0,
+              summary.sessionCount == summary.sessions.count,
+              Set(summary.sessions.map { [$0.id, $0.agent ?? ""] }).count == summary.sessions.count else {
+            throw ClientError.invalidResponse
+        }
+        var sessionCalls = 0
+        for item in summary.sessions {
+            guard !item.id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  item.calls >= 0, item.calls <= summary.calls - sessionCalls else {
+                throw ClientError.invalidResponse
+            }
+            sessionCalls += item.calls
+        }
+        let page: Page = try await fetch(endpoint, query: [
+            URLQueryItem(name: "period", value: period),
+            URLQueryItem(name: "limit", value: "200"),
+            URLQueryItem(name: "offset", value: "0")
+        ])
+        guard page.offset == 0, page.total >= page.rows.count, page.rows.count <= 200 else {
+            throw ClientError.invalidPagination
+        }
         var rows: [(Row, Date)] = []
-        var offset = 0
-        var total = 0
-        while offset < 2_000 {
-            try Task.checkCancellation()
-            var components = URLComponents(url: endpoint, resolvingAgainstBaseURL: false)!
-            components.queryItems = [
-                URLQueryItem(name: "period", value: "7d"),
-                URLQueryItem(name: "limit", value: String(min(200, 2_000 - offset))),
-                URLQueryItem(name: "offset", value: String(offset))
-            ]
-            var request = URLRequest(url: components.url!)
-            request.httpMethod = "GET"
-            request.cachePolicy = .reloadIgnoringLocalCacheData
-            let (data, response) = try await session.data(for: request, delegate: NoRedirects())
-            guard let http = response as? HTTPURLResponse else { throw ClientError.invalidResponse }
-            guard http.statusCode == 200 else { throw ClientError.httpStatus(http.statusCode) }
-            let page: Page
-            do { page = try JSONDecoder().decode(Page.self, from: data) }
-            catch { throw ClientError.invalidResponse }
-            guard page.offset == offset, page.total >= 0, page.rows.count <= 200 else {
-                throw ClientError.invalidPagination
-            }
-            total = max(total, page.total)
-            if page.rows.isEmpty {
-                guard offset >= page.total else { throw ClientError.invalidPagination }
-                break
-            }
-            for row in page.rows {
-                guard let date = fractional.date(from: row.t) ?? plain.date(from: row.t), row.ms >= 0 else {
-                    throw ClientError.invalidResponse
-                }
-                if date >= start && date <= end { rows.append((row, date)) }
-            }
-            offset += page.rows.count
-            if offset >= page.total { break }
+        var seen: Set<Int64> = []
+        for row in page.rows {
+            guard let timestamp = date(row.t), row.ms >= 0 else { throw ClientError.invalidResponse }
+            // route_id is the server request identity; never deduplicate by timestamp/session.
+            if let id = row.route_id, !seen.insert(id).inserted { continue }
+            if timestamp >= start { rows.append((row, timestamp)) }
         }
         var index = await metadata.snapshot()
         if let supplemental = await tokei?.snapshot() {
@@ -133,8 +162,40 @@ public struct MagpieClient: Sendable {
                                   projectPath: matches.compactMap(\.path).first, milliseconds: row.ms,
                                   sessionTitle: matches.compactMap(\.title).first)
         }
-        return Batch(requests: result, isTruncated: offset < total, totalAvailable: total,
-                     projectPaths: Array(Set(index.entries.values.compactMap(\.path))).sorted())
+        // The API groups by (id, agent); one logical session can span agents.
+        let groups = Dictionary(grouping: summary.sessions, by: \.id)
+        let stats = groups.keys.sorted().map { id in
+            let match = index.lookup(id)
+            return ProjectSessionStats(count: groups[id]!.reduce(0) { $0 + $1.calls },
+                                       projectPath: match?.path, sessionID: id, title: match?.title)
+        }
+        return Batch(requests: result, isTruncated: page.rows.count < page.total,
+                     totalAvailable: summary.calls,
+                     projectPaths: Array(Set(index.entries.values.compactMap(\.path))).sorted(),
+                     sessionStats: stats, summarySessionCount: summary.sessionCount, period: period, since: start)
+    }
+
+    private func fetch<T: Decodable>(_ url: URL, query: [URLQueryItem]) async throws -> T {
+        try Task.checkCancellation()
+        var components = URLComponents(url: url, resolvingAgainstBaseURL: false)!
+        components.queryItems = query
+        var request = URLRequest(url: components.url!)
+        request.httpMethod = "GET"
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        let (data, response) = try await session.data(for: request, delegate: NoRedirects())
+        guard let http = response as? HTTPURLResponse else { throw ClientError.invalidResponse }
+        guard http.statusCode == 200 else { throw ClientError.httpStatus(http.statusCode) }
+        do { return try JSONDecoder().decode(T.self, from: data) }
+        catch { throw ClientError.invalidResponse }
+    }
+
+    private struct Summary: Decodable {
+        struct Session: Decodable { let id: String; let agent: String?; let calls: Int }
+        let period: String
+        let since: String
+        let calls: Int
+        let sessionCount: Int
+        let sessions: [Session]
     }
 
     private struct Page: Decodable {
@@ -144,6 +205,7 @@ public struct MagpieClient: Sendable {
     }
 
     private struct Row: Decodable {
+        let route_id: Int64?
         let t: String
         let agent: String
         let session: String?

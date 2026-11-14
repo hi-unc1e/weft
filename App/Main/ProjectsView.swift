@@ -19,11 +19,12 @@ struct ProjectsView: View {
         @Bindable var store = model.projects
         let now = Date.now
         let today = Calendar.current.startOfDay(for: now)
-        let start = Calendar.current.date(byAdding: .day, value: 1 - days, to: today) ?? today
+        let start = store.since ?? (Calendar.current.date(byAdding: .day, value: 1 - days, to: today) ?? today)
         let interval = DateInterval(start: start, end: now)
         let report = ProjectReport.build(activities: segments.map {
             ProjectActivity(start: $0.start, end: $0.end, title: $0.title, url: $0.url)
-        }, requests: store.requests, interval: interval, projectPaths: store.projectPaths)
+        }, requests: store.requests, interval: interval, projectPaths: store.projectPaths,
+           sessionStats: store.sessionStats, requestsWithoutSession: store.requestsWithoutSession)
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 HStack {
@@ -45,10 +46,21 @@ struct ProjectsView: View {
                     .font(.callout).foregroundStyle(.secondary)
                 TextField("搜索项目名称、路径或会话主题", text: $search)
                     .textFieldStyle(.roundedBorder)
+                if model.preferences.stripTitles {
+                    Text("窗口标题记录已关闭，项目时长无法完整识别。可在设置 → 活动记录中开启。")
+                        .foregroundStyle(.orange)
+                } else if !model.accessibilityGranted {
+                    HStack {
+                        Text("当前版本缺少有效的辅助功能授权，无法读取窗口标题。临时签名更新后需重新授权。")
+                        Button("打开辅助功能设置") { SystemSettings.openAccessibility() }
+                    }.foregroundStyle(.orange)
+                }
+                let titled = segments.filter { !($0.title ?? "").isEmpty }.count
+                Text("历史窗口标题覆盖：\(titled) / \(segments.count) 条。缺失记录不能追溯补回；已识别时长仅为下限。")
+                    .font(.caption).foregroundStyle(.secondary)
                 if let error = store.error { Text(error).foregroundStyle(.orange).textSelection(.enabled) }
                 if let updated = store.updatedAt {
-                    Text("更新于 \(updated.formatted(date: .omitted, time: .shortened)) · 已读取 \(store.requests.count) 条请求" +
-                         (store.isTruncated ? "，共 \(store.totalAvailable) 条；当前为最近样本，未覆盖完整 7 天。" : "。"))
+                    Text("更新于 \(updated.formatted(date: .omitted, time: .shortened)) · 请求和会话数来自完整区间汇总；活动详情采样 \(store.requests.count) 条。")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 if report.projects.isEmpty {
@@ -63,13 +75,13 @@ struct ProjectsView: View {
                         HStack {
                             Label(usage.project.name, systemImage: "folder").font(.headline)
                             Spacer()
-                            Text("前台 \(Format.duration(usage.activeTime))").monospacedDigit()
+                            Text(usage.measuredActiveTime.map { "已识别前台 ≥\(Format.duration($0))" } ?? "前台时长未知").monospacedDigit()
                         }
                         HStack {
                             Text("\(usage.requests) 次 AI 请求 · \(usage.sessions) 个会话")
                             Spacer()
                             if let last = usage.lastRequest {
-                                Text("最近 \(last.formatted(date: .abbreviated, time: .shortened))")
+                                Text("最近采样 \(last.formatted(date: .abbreviated, time: .shortened))")
                             }
                         }.font(.caption).foregroundStyle(.secondary)
                         Button(selected == usage.id ? "收起活动" : "查看活动") {
@@ -82,7 +94,7 @@ struct ProjectsView: View {
                                 $0.date >= start && $0.date < now &&
                                 $0.projectPath.map { usage.project.paths.contains($0) } == true
                             }
-                            let titles = Array(Set(projectRequests.compactMap(\.sessionTitle))).sorted()
+                            let titles = Array(Set(projectRequests.compactMap(\.sessionTitle) + usage.project.sessionTitles)).sorted()
                             if !titles.isEmpty {
                                 Text("会话主题").font(.subheadline.weight(.medium))
                                 ForEach(titles, id: \.self) { title in
@@ -93,7 +105,7 @@ struct ProjectsView: View {
                             let matching = segments.filter {
                                 $0.end > start && $0.start < now &&
                                 TrackedProject.match(title: $0.title, url: $0.url,
-                                    projects: TrackedProject.catalog(requests: store.requests, paths: store.projectPaths))?.id == usage.id
+                                    projects: report.projects.map(\.project))?.id == usage.id
                             }
                             if matching.isEmpty {
                                 Text("有 AI 请求记录，尚无明确归属的前台活动。")
@@ -110,6 +122,6 @@ struct ProjectsView: View {
             }.padding(20)
         }
         .navigationTitle("最近在忙什么项目")
-        .task { await store.refresh() }
+        .task(id: days) { await store.refresh(days: days) }
     }
 }
