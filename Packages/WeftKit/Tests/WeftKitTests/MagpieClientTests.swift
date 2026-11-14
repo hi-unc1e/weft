@@ -224,6 +224,40 @@ struct MagpieClientTests {
         }
     }
 
+    @Test func summaryURLHasNoTrailingSlashAndErrorsAreReadable() async throws {
+        let root = try root()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let client = client(root) { _ in (500, Data()) }
+        MagpieStub.state.withLock { $0.reply = { request in
+            switch request.url!.absoluteString {
+            case "http://127.0.0.1:3425/v1/magpie/usage?period=7d":
+                return (200, Data(#"{"period":"7d","since":"2027-01-09T00:00:00+08:00","calls":0,"sessionCount":0,"sessions":[]}"#.utf8))
+            case "http://127.0.0.1:3425/v1/magpie/usage/requests?period=7d&limit=200&offset=0":
+                return (200, Self.page(rows: [], total: 0, offset: 0))
+            default: return (404, Data())
+            }
+        } }
+        #expect(try await client.requestsWithMetadata().totalRequests == 0)
+        #expect(MagpieClient.ClientError.httpStatus(404).localizedDescription == "Magpie 请求失败（HTTP 404）。")
+        #expect(MagpieClient.ClientError.invalidResponse.localizedDescription.contains("统计不完整"))
+        #expect(MagpieClient.ClientError.invalidPagination.localizedDescription.contains("分页"))
+    }
+
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["WEFT_MAGPIE_TESTS"] == "1"))
+    func liveDefaultClientUsesRealSummaryEndpoint() async throws {
+        // No URLProtocol stub: exercise production URL construction, transport and NoRedirects.
+        let client = MagpieClient()
+        for days in [1, 7] {
+            let batch = try await client.requestsWithMetadata(days: days)
+            #expect(batch.period == (days == 1 ? "today" : "7d"))
+            #expect(batch.totalRequests > 0)
+            #expect(!batch.sessionStats.isEmpty)
+            let halo = batch.sessionStats.filter { $0.projectPath?.lowercased().contains("halo-cam") == true }
+            #expect(!halo.isEmpty)
+            print("Direct MagpieClient \(batch.period): calls=\(batch.totalRequests), HaloCam sessions=\(halo.count) calls=\(halo.reduce(0) { $0 + $1.count })")
+        }
+    }
+
     @Test(.enabled(if: ProcessInfo.processInfo.environment["WEFT_MAGPIE_TESTS"] == "1"))
     func liveLoopbackMetadataCoverage() async throws {
         // Freeze the two real API responses so concurrent new traffic cannot invalidate equality.

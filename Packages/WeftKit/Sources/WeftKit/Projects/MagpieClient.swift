@@ -60,10 +60,21 @@ public struct MagpieClient: Sendable {
         }
     }
 
-    public enum ClientError: Error, Sendable {
+    public enum ClientError: LocalizedError, Sendable {
         case httpStatus(Int)
         case invalidResponse
         case invalidPagination
+
+        public var errorDescription: String? {
+            switch self {
+            case .httpStatus(let status):
+                return "Magpie 请求失败（HTTP \(status)）。"
+            case .invalidResponse:
+                return "Magpie 返回的数据格式无效或统计不完整。"
+            case .invalidPagination:
+                return "Magpie 返回的分页数据不一致。"
+            }
+        }
     }
 
     private let endpoint: URL
@@ -113,7 +124,13 @@ public struct MagpieClient: Sendable {
         fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         let plain = ISO8601DateFormatter()
         func date(_ value: String) -> Date? { fractional.date(from: value) ?? plain.date(from: value) }
-        let summary: Summary = try await fetch(endpoint.deletingLastPathComponent(), query: [
+        // deletingLastPathComponent produces a directory URL (/usage/), which Magpie rejects.
+        // URL.path can hide that trailing slash; normalize the actual encoded URL path instead.
+        var summaryURL = URLComponents(url: endpoint.deletingLastPathComponent(), resolvingAgainstBaseURL: false)!
+        while summaryURL.percentEncodedPath.hasSuffix("/") {
+            summaryURL.percentEncodedPath.removeLast()
+        }
+        let summary: Summary = try await fetch(summaryURL.url!, query: [
             URLQueryItem(name: "period", value: period)
         ])
         guard summary.period == period, let start = date(summary.since), summary.calls >= 0,
