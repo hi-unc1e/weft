@@ -79,6 +79,7 @@ final class AppModel {
         tracker.start()
         classifier.retryPending()
         describeTimeEntriesPeriodically()
+        loadRemoteAPIKey()
     }
 
     /// Describes finished time entries in the background so the timeline is ready when opened.
@@ -155,14 +156,14 @@ final class AppModel {
     static let apiKeyAccount = "remoteAPIKey"
 
     /// The model picked in Settings. The keychain is only read once a remote model is chosen.
-    private static func chosenModel(_ preferences: Preferences) -> any AIClassifying {
+    private static func chosenModel(_ preferences: Preferences, apiKey: String = "") -> any AIClassifying {
         switch preferences.modelProvider {
         case .appleIntelligence:
             LocalModel.make()
         case .openAICompatible:
             OpenAICompatibleClassifier(config: RemoteModelConfig(
                 baseURL: preferences.remoteBaseURL, model: preferences.remoteModel,
-                apiKey: Keychain.string(for: apiKeyAccount) ?? ""
+                apiKey: apiKey
             ))
         }
     }
@@ -180,6 +181,23 @@ final class AppModel {
         ai.use(Self.chosenModel(preferences))
         classifier.retryPending()
         timeEntries.retryFailed()
+        loadRemoteAPIKey()
+    }
+
+    /// Legacy keychain ACL checks can block even when interaction is forbidden.
+    /// Keep that work off the main actor so local tracking and project statistics always start.
+    private func loadRemoteAPIKey() {
+        guard preferences.modelProvider == .openAICompatible else { return }
+        let baseURL = preferences.remoteBaseURL
+        let modelName = preferences.remoteModel
+        Task { [weak self] in
+            let key = await Task.detached { Keychain.string(for: "remoteAPIKey") ?? "" }.value
+            guard let self, preferences.modelProvider == .openAICompatible,
+                  preferences.remoteBaseURL == baseURL, preferences.remoteModel == modelName else { return }
+            ai.use(Self.chosenModel(preferences, apiKey: key))
+            classifier.retryPending()
+            timeEntries.retryFailed()
+        }
     }
 
     func refreshPermissions() {

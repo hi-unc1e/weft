@@ -92,6 +92,9 @@ enum Keychain {
         let query: [CFString: Any] = [
             kSecClass: kSecClassGenericPassword, kSecAttrService: service, kSecAttrAccount: account,
             kSecReturnData: true, kSecMatchLimit: kSecMatchLimitOne,
+            // Background startup must not wait for a keychain authorization dialog after a rebuild.
+            // Keep the item intact; the user can configure the model in Settings if access is denied.
+            kSecUseAuthenticationUI: kSecUseAuthenticationUIFail,
         ]
         guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess, let data = result as? Data else { return nil }
         return String(data: data, encoding: .utf8)
