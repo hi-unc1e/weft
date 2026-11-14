@@ -72,7 +72,7 @@ bash scripts/ci-import-signing.sh cleanup
 
 PR 仅运行包测试，签名 job 仅允许本仓库 push 或手动触发。
 push 范围为 `master`、`main`、`release/**`，token 仅有 `contents: read`。
-macOS 15 runner 显式使用 Xcode 26.2，以满足 Swift 6.2；版本依据 [runner 官方镜像清单](https://github.com/actions/runner-images/blob/main/images/macos/macos-15-Readme.md)。
+测试任务在 macOS 15 上运行；签名打包任务在 macOS 26 上使用 Xcode 26.2，避开 macOS 15 上新图标编译服务的系统框架崩溃。版本依据 [runner 官方镜像清单](https://github.com/actions/runner-images/blob/main/images/macos/macos-26-arm64-Readme.md)。
 Release 构建 Apple Silicon 应用，关闭 debug dylib 和 DWARF 调试信息，扫描成品中的用户目录路径。
 构建传入固定 SHA1 与专用 `--keychain`，验证签名、identifier `me.weishu.Weft`、证书叶节点 SHA1 和源码 revision 后上传 ZIP artifact，不发布 release。
 
