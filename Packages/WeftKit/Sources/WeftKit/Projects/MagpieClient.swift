@@ -158,8 +158,9 @@ public struct MagpieClient: Sendable {
         var seen: Set<Int64> = []
         for row in page.rows {
             guard let timestamp = date(row.t), row.ms >= 0 else { throw ClientError.invalidResponse }
-            // route_id is the server request identity; never deduplicate by timestamp/session.
-            if let id = row.route_id, !seen.insert(id).inserted { continue }
+            // Only positive gateway route IDs identify requests. Zero/missing IDs can be
+            // independent imported requests; never deduplicate them by timestamp/session.
+            if let id = row.route_id, id > 0, !seen.insert(id).inserted { continue }
             if timestamp >= start { rows.append((row, timestamp)) }
         }
         var index = await metadata.snapshot()

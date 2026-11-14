@@ -183,6 +183,23 @@ struct MagpieClientTests {
         }
     }
 
+    @Test func deduplicatesOnlyPositiveGatewayRouteIDs() async throws {
+        let root = try root()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let ids: [Int?] = [7, 7, 8, 0, 0, nil, nil, -1, -1]
+        let rows: [[String: Any]] = ids.map { id in
+            var row: [String: Any] = ["t": "2027-01-15T01:00:00+08:00",
+                                      "agent": "test", "session": "same", "ms": 1]
+            if let id { row["route_id"] = id }
+            return row
+        }
+        let page = Self.page(rows: rows, total: rows.count, offset: 0)
+        let client = client(root) { _ in (200, page) }
+        let batch = try await client.requestsWithMetadata()
+        #expect(batch.requests.count == 8)
+        #expect(batch.totalRequests == 2001)
+    }
+
     @Test func callsIncludeFailuresWithoutAddingErrorsAgain() async throws {
         let root = try root()
         defer { try? FileManager.default.removeItem(at: root) }
