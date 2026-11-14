@@ -15,7 +15,7 @@ cleanup() {
   local keychain="$dir/signing.keychain-db"
   if [[ -f "$dir/.trust-requested" ]]; then
     [[ -s "$dir/certificate.pem" && ! -L "$dir/certificate.pem" ]] || die 'Missing certificate needed to remove temporary trust.'
-    security remove-trusted-cert "$dir/certificate.pem" || return 1
+    sudo -n security remove-trusted-cert -d "$dir/certificate.pem" || return 1
     rm -f -- "$dir/.trust-requested"
   fi
   if [[ -e "$keychain" ]]; then
@@ -91,9 +91,11 @@ certificate_identity=${certificate_identity//:/}
 [[ "$certificate_identity" == "$identity" ]] || die 'PKCS12 leaf certificate does not match MACOS_SIGNING_IDENTITY.'
 # Local bootstrap owns persistent user trust. Only CI adds/removes temporary trust.
 if [[ "${GITHUB_ACTIONS:-}" == true ]]; then
-  # Never use the system domain (-d). Mark before a potentially partial failure.
+  # User-domain trust can prompt for a GUI authorization. Only an ephemeral hosted
+  # runner may use noninteractive administrator trust, restricted to code signing.
+  [[ "${RUNNER_ENVIRONMENT:-}" == github-hosted ]] || die 'Automatic trust requires an ephemeral GitHub-hosted runner.'
   touch "$WEFT_SIGNING_DIR/.trust-requested"
-  security add-trusted-cert -r trustRoot -p codeSign -k "$keychain" "$WEFT_SIGNING_DIR/certificate.pem"
+  sudo -n security add-trusted-cert -d -r trustRoot -p codeSign -k "$keychain" "$WEFT_SIGNING_DIR/certificate.pem"
 fi
 unset p12_password keychain_password MACOS_SIGNING_P12 MACOS_SIGNING_PASSWORD
 rm -f -- "$WEFT_SIGNING_DIR/signing.p12" "$WEFT_SIGNING_DIR/p12-password" "$WEFT_SIGNING_DIR/keychain-password"

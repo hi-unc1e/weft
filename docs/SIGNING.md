@@ -45,8 +45,7 @@ PKCS12 和密码文件权限为 `0600`；keychain 密码临时随机生成。
 导入仅授权 `/usr/bin/codesign`，partition list 只作用于专用 keychain 中的私有签名密钥。
 用系统 `/usr/bin/openssl pkcs12 -clcerts -nokeys` 从 PKCS12 提取公共证书，先校验其 SHA1。
 自签证书仅导入 keychain 时可能被判定为不可信，导致按 SHA1 签名报 `specified item could not be found`。
-因此经明确授权，仅在 `GITHUB_ACTIONS=true` 时执行 `security add-trusted-cert -r trustRoot -p codeSign -k <临时keychain> <证书>`：
-只设置当前用户域中该证书的代码签名信任，不使用 `-d` 系统域，不扩大到其他用途。
+本机 bootstrap 仅设置该证书的用户级 `codeSign` 信任。CI 的用户级信任可能等待 GUI 授权，因此只有 `GITHUB_ACTIONS=true` 且 `RUNNER_ENVIRONMENT=github-hosted` 的临时 runner 使用 `sudo -n security add-trusted-cert -d -r trustRoot -p codeSign` 非交互设置信任，任务结束移除；不影响维护者的系统信任，不扩大到 HTTPS 等其他用途。
 导入和信任设置后立即删除临时 PKCS12 和密码文件。
 自签身份通过真实签名探针及 `certificate leaf = H"SHA1"` requirement 验证，不依赖 `find-identity -v` 数量。
 若上述限定信任仍不能签名，直接失败，不自动扩大信任。
@@ -59,7 +58,7 @@ bash scripts/ci-import-signing.sh cleanup
 ```
 
 清理只接受临时根目录下带归属标记的 `weft-ci-signing.*` 目录。
-若本次在 CI 添加过信任，先 `security remove-trusted-cert <证书>` 移除用户域信任，再删除专用 keychain 和临时目录。
+若本次在 CI 添加过信任，先 `sudo -n security remove-trusted-cert -d <证书>` 移除该临时 runner 的信任，再删除专用 keychain 和临时目录。
 移除信任失败会报错并保留清理材料，避免静默遗留。
 脚本失败时自行清理，workflow 另用 `always()` 兜底；不删除固定签名目录。
 本机模式使用本地 bootstrap 已建立的持久信任，不添加或移除证书信任。

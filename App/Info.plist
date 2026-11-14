@@ -39,5 +39,7 @@
 	<string>Weft reads the URL of the active browser tab to categorize your time.</string>
 	<key>NSHumanReadableCopyright</key>
 	<string>Open source under the MIT license.</string>
+	<key>WeftSourceRevision</key>
+	<string>$(WEFT_SOURCE_REVISION)</string>
 </dict>
 </plist>
