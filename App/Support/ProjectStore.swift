@@ -4,60 +4,45 @@ import WeftKit
 
 @MainActor @Observable
 final class ProjectStore {
-    var requests: [ProjectRequest] = []
-    var projectPaths: [String] = []
-    var sessionStats: [ProjectSessionStats] = []
-    var localSessions: [LocalProjectSession] = []
-    var recoveredRequests = 0
-    var recoveryComplete = true
-    var since: Date?
-    var selectedDays = 7
-    var requestsWithoutSession = 0
-    var isRefreshing = false
-    var error: String?
-    var updatedAt: Date?
-    var isTruncated = false
-    var totalAvailable = 0
+    @ObservationIgnored private let coordinator: ProjectRefreshCoordinator
+
+    /// Read once when constructing a report. Only show statistics if matchesSelection
+    /// (and selectedDays == the view's picker value); batch may retain an older range.
+    var snapshot: ProjectRefreshSnapshot { coordinator.snapshot }
+    var selectedDays: Int { snapshot.selectedDays }
+    var loadedDays: Int? { snapshot.loadedDays }
+    var revision: UInt64 { snapshot.revision }
+    var matchesSelection: Bool { snapshot.matchesSelection }
+    var requests: [ProjectRequest] { snapshot.batch?.requests ?? [] }
+    var projectPaths: [String] { snapshot.batch?.projectPaths ?? [] }
+    var sessionStats: [ProjectSessionStats] { snapshot.batch?.sessionStats ?? [] }
+    var localSessions: [LocalProjectSession] { snapshot.batch?.localSessions ?? [] }
+    var recoveredRequests: Int { snapshot.batch?.recoveredRequests ?? 0 }
+    var recoveryComplete: Bool { snapshot.batch?.recoveryComplete ?? true }
+    var since: Date? { snapshot.batch?.since }
+    var requestsWithoutSession: Int { snapshot.batch?.requestsWithoutSession ?? 0 }
+    var isRefreshing: Bool { snapshot.isRefreshing }
+    var error: String? { snapshot.error }
+    var updatedAt: Date? { snapshot.updatedAt }
+    var isTruncated: Bool { snapshot.batch?.isTruncated ?? false }
+    var totalAvailable: Int { snapshot.batch?.totalAvailable ?? 0 }
     var enabled: Bool {
-        didSet {
-            UserDefaults.standard.set(!enabled, forKey: "magpieProjectsDisabled")
-            if !enabled { requests = []; projectPaths = []; sessionStats = []; localSessions = []; requestsWithoutSession = 0; recoveredRequests = 0; since = nil; updatedAt = nil; error = nil }
+        get { snapshot.enabled }
+        set {
+            UserDefaults.standard.set(!newValue, forKey: "magpieProjectsDisabled")
+            coordinator.setEnabled(newValue)
         }
     }
-    @ObservationIgnored private let client = MagpieClient()
 
-    init() { enabled = !UserDefaults.standard.bool(forKey: "magpieProjectsDisabled") }
+    init(loader: ProjectRefreshCoordinator.Loader? = nil) {
+        let client = MagpieClient()
+        coordinator = ProjectRefreshCoordinator(
+            enabled: !UserDefaults.standard.bool(forKey: "magpieProjectsDisabled"),
+            loader: loader ?? { try await client.requestsWithMetadata(days: $0) }
+        )
+    }
 
     func refresh(days: Int? = nil) async {
-        if let days, days != selectedDays {
-            selectedDays = days
-            requests = []; sessionStats = []; localSessions = []; requestsWithoutSession = 0; recoveredRequests = 0; since = nil; updatedAt = nil
-        }
-        guard enabled, !isRefreshing else { return }
-        let requestedDays = selectedDays
-        isRefreshing = true
-        defer {
-            isRefreshing = false
-            if selectedDays != requestedDays { Task { await refresh() } }
-        }
-        do {
-            let result = try await client.requestsWithMetadata(days: requestedDays)
-            guard enabled, selectedDays == requestedDays else { return }
-            requests = result.requests
-            projectPaths = result.projectPaths
-            sessionStats = result.sessionStats
-            localSessions = result.localSessions
-            recoveredRequests = result.recoveredRequests
-            recoveryComplete = result.recoveryComplete
-            requestsWithoutSession = result.requestsWithoutSession
-            since = result.since
-            isTruncated = result.isTruncated
-            totalAvailable = result.totalAvailable
-            updatedAt = .now
-            error = nil
-        } catch {
-            guard enabled, selectedDays == requestedDays else { return }
-            self.error = "无法读取 Magpie：\(error.localizedDescription)。已有结果保留，稍后可重试。"
-        }
+        await coordinator.refresh(days: days)
     }
 }

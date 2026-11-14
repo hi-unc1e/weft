@@ -9,6 +9,14 @@ struct ProjectsView: View {
     @State private var days = 7
     @State private var selected: String?
     @State private var search = ""
+    @State private var openedAt = Date.now
+    @State private var computed: ComputedReport?
+
+    private struct ComputedReport {
+        let input: ProjectReportInput
+        let days: Int
+        let report: ProjectReport
+    }
 
     init() {
         let since = Calendar.current.date(byAdding: .day, value: -7, to: .now) ?? .now
@@ -17,14 +25,17 @@ struct ProjectsView: View {
 
     var body: some View {
         @Bindable var store = model.projects
-        let now = Date.now
+        // A stable endpoint prevents publishing a report from starting the same task again.
+        // Tracking updates the segment end; refresh updates updatedAt.
+        let now = max(store.updatedAt ?? openedAt, segments.last?.end ?? openedAt)
         let today = Calendar.current.startOfDay(for: now)
         let start = store.since ?? (Calendar.current.date(byAdding: .day, value: 1 - days, to: today) ?? today)
         let interval = DateInterval(start: start, end: now)
-        let report = ProjectReport.build(activities: segments.map {
+        let input: ProjectReportInput? = store.matchesSelection && store.selectedDays == days ? ProjectReportInput(activities: segments.map {
             ProjectActivity(start: $0.start, end: $0.end, title: $0.title, url: $0.url)
         }, requests: store.requests, interval: interval, projectPaths: store.projectPaths,
-           sessionStats: store.sessionStats, requestsWithoutSession: store.requestsWithoutSession, localSessions: store.localSessions)
+           sessionStats: store.sessionStats, requestsWithoutSession: store.requestsWithoutSession,
+           localSessions: store.localSessions) : nil
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 HStack {
@@ -35,9 +46,9 @@ struct ProjectsView: View {
                     Spacer()
                     Toggle("读取本地 Magpie", isOn: $store.enabled).toggleStyle(.switch)
                         .onChange(of: store.enabled) { _, enabled in
-                            if enabled { Task { await store.refresh() } }
+                            if enabled { Task { await store.refresh(days: days) } }
                         }
-                    Button { Task { await store.refresh() } } label: {
+                    Button { Task { await store.refresh(days: days) } } label: {
                         Label("刷新", systemImage: "arrow.clockwise")
                     }.disabled(store.isRefreshing || !store.enabled)
                     if store.isRefreshing { ProgressView().controlSize(.small) }
@@ -59,7 +70,7 @@ struct ProjectsView: View {
                 Text("历史窗口标题覆盖：\(titled) / \(segments.count) 条。缺失记录不能追溯补回；已识别时长仅为下限。")
                     .font(.caption).foregroundStyle(.secondary)
                 if let error = store.error { Text(error).foregroundStyle(.orange).textSelection(.enabled) }
-                if let updated = store.updatedAt {
+                if input != nil, let updated = store.updatedAt {
                     Text("更新于 \(updated.formatted(date: .omitted, time: .shortened)) · 完整区间汇总 + 本地会话去重；按响应 ID 补回 \(store.recoveredRequests) 次请求。详情采样 \(store.requests.count) 条。")
                         .font(.caption).foregroundStyle(.secondary)
                     if !store.recoveryComplete {
@@ -67,6 +78,45 @@ struct ProjectsView: View {
                             .font(.caption).foregroundStyle(.orange)
                     }
                 }
+                if let computed, let input, computed.days == days {
+                    if computed.input != input {
+                        Text("正在更新项目归属，暂时显示本区间上次结果…")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    projectList(computed, store: store)
+                } else if !store.enabled {
+                    ContentUnavailableView("项目识别已暂停", systemImage: "folder")
+                } else if store.isRefreshing || input != nil || store.selectedDays != days {
+                    HStack {
+                        ProgressView().controlSize(.small)
+                        Text("正在读取\(days == 1 ? "今天" : "最近 7 天")的项目与会话…")
+                            .foregroundStyle(.secondary)
+                    }.padding(.vertical)
+                }
+                Text("项目匹配在本机完成，不调用模型、不发送会话正文。Code 等原有分类可继续使用。")
+                    .font(.caption).foregroundStyle(.secondary)
+            }.padding(20)
+        }
+        .navigationTitle("最近在忙什么项目")
+        .task(id: days) { await store.refresh(days: days) }
+        .task(id: input) {
+            guard let input else { return }
+            let requestedDays = days
+            do {
+                let report = try await input.buildInBackground()
+                try Task.checkCancellation()
+                computed = ComputedReport(input: input, days: requestedDays, report: report)
+            } catch is CancellationError {
+                // A newer input owns the next result.
+            } catch { /* Background construction only throws on cancellation. */ }
+        }
+    }
+
+    @ViewBuilder private func projectList(_ computed: ComputedReport, store: ProjectStore) -> some View {
+        let report = computed.report
+        let start = computed.input.interval.start
+        let now = computed.input.interval.end
+        Group {
                 if report.projects.isEmpty {
                     ContentUnavailableView(store.enabled ? "尚无可识别项目" : "项目识别已暂停", systemImage: "folder",
                         description: Text("Magpie 请求需要带会话 ID，并能在本地 Codex 或 Claude 会话中找到工作目录。"))
@@ -96,7 +146,7 @@ struct ProjectsView: View {
                         if selected == usage.id {
                             Text(usage.project.paths.joined(separator: "\n"))
                                 .font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
-                            let projectRequests = store.requests.filter {
+                            let projectRequests = computed.input.requests.filter {
                                 $0.date >= start && $0.date < now &&
                                 $0.projectPath.map { usage.project.paths.contains($0) } == true
                             }
@@ -108,10 +158,12 @@ struct ProjectsView: View {
                                         .font(.callout).textSelection(.enabled)
                                 }
                             }
-                            let matching = segments.filter {
-                                $0.end > start && $0.start < now &&
-                                TrackedProject.match(title: $0.title, url: $0.url,
-                                    projects: report.projects.map(\.project))?.id == usage.id
+                            let matchedActivities = Set(zip(computed.input.activities, report.activityProjectIDs).compactMap {
+                                $0.1 == usage.id ? $0.0 : nil
+                            })
+                            let matching = segments.filter { segment in
+                                matchedActivities.contains(ProjectActivity(start: segment.start, end: segment.end,
+                                                                            title: segment.title, url: segment.url))
                             }
                             if matching.isEmpty {
                                 Text("有 AI 请求记录，尚无明确归属的前台活动。")
@@ -123,11 +175,6 @@ struct ProjectsView: View {
                 }
                 Text("待归属前台时间：\(Format.duration(report.unattributedTime)) · 无法关联项目的请求：\(report.unresolvedRequests)")
                     .font(.callout).foregroundStyle(.secondary)
-                Text("项目匹配在本机完成，不调用模型、不发送会话正文。Code 等原有分类可继续使用。")
-                    .font(.caption).foregroundStyle(.secondary)
-            }.padding(20)
         }
-        .navigationTitle("最近在忙什么项目")
-        .task(id: days) { await store.refresh(days: days) }
     }
 }

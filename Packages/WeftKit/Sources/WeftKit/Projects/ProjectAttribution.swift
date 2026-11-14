@@ -46,39 +46,83 @@ public struct TrackedProject: Identifiable, Sendable, Hashable {
 
     /// Only explicit title/URL evidence counts. Concurrent background requests never choose a project.
     public static func match(title: String?, url: String?, projects: [Self]) -> Self? {
+        ProjectMatcher(projects: projects).match(title: title, url: url)
+    }
+}
+
+/// Prepare literal evidence once per catalogue. No regular expressions are compiled per activity.
+private struct ProjectMatcher {
+    struct Evidence {
+        let project: TrackedProject
+        let paths: [String]
+        let leaves: [String]
+        let topics: [String]
+    }
+    let evidence: [Evidence]
+
+    init(projects: [TrackedProject]) {
+        evidence = projects.map { project in
+            Evidence(project: project, paths: project.paths.map { $0.lowercased() },
+                     leaves: project.paths.map { URL(fileURLWithPath: $0).lastPathComponent.lowercased() }
+                        .filter { $0.count >= 3 }, topics: project.sessionTitles.map { $0.lowercased() })
+        }
+    }
+
+    func match(title: String?, url: String?) -> TrackedProject? {
         let text = [title, url].compactMap { $0 }.joined(separator: " ").lowercased()
         guard !text.isEmpty else { return nil }
-        let paths = projects.compactMap { project -> (Self, Int)? in
-            guard let length = project.paths.filter({ path in
-                let pattern = NSRegularExpression.escapedPattern(for: path.lowercased()) + "(?=$|[/\\s\\\"'—–])"
-                return text.range(of: pattern, options: .regularExpression) != nil
+        let paths = evidence.compactMap { item -> (TrackedProject, Int)? in
+            guard let length = item.paths.filter({ path in
+                contains(path, in: text, before: { _ in true }, after: {
+                    CharacterSet.whitespacesAndNewlines.contains($0) || "/\"'—–".unicodeScalars.contains($0)
+                })
             }).map(\.count).max() else { return nil }
-            return (project, length)
+            return (item.project, length)
         }
         if let longest = paths.map(\.1).max() {
             let precise = paths.filter { $0.1 == longest }
             if precise.count == 1 { return precise[0].0 }
         }
-        let candidates = projects.filter { project in
-            if project.sessionTitles.contains(where: { title in
-                text.range(of: "(?<![\\p{L}\\p{N}_])" + NSRegularExpression.escapedPattern(for: title.lowercased()) + "(?![\\p{L}\\p{N}_])",
-                           options: .regularExpression) != nil
+        let candidates = evidence.filter { item in
+            if item.topics.contains(where: { title in
+                contains(title, in: text, before: { !isWord($0) }, after: { !isWord($0) })
             }) { return true }
-            if project.id == "halocam", normalized(text).contains("halocam") || text.contains("halo 相机") || text.contains("halo相机") {
+            if item.project.id == "halocam", TrackedProject.normalized(text).contains("halocam") || text.contains("halo 相机") || text.contains("halo相机") {
                 return true
             }
-            return project.paths.contains { path in
-                let leaf = URL(fileURLWithPath: path).lastPathComponent.lowercased()
-                guard leaf.count >= 3 else { return false }
-                let pattern = "(?<![\\p{L}\\p{N}_.-])" + NSRegularExpression.escapedPattern(for: leaf) + "(?![\\p{L}\\p{N}_.-])"
-                return text.range(of: pattern, options: .regularExpression) != nil
+            return item.leaves.contains { leaf in
+                contains(leaf, in: text, before: { !isWord($0) && $0 != "." && $0 != "-" },
+                         after: { !isWord($0) && $0 != "." && $0 != "-" })
             }
         }
-        return candidates.count == 1 ? candidates[0] : nil
+        return candidates.count == 1 ? candidates[0].project : nil
+    }
+
+    private func isWord(_ scalar: Unicode.Scalar) -> Bool {
+        if scalar == "_" { return true }
+        switch scalar.properties.generalCategory {
+        case .uppercaseLetter, .lowercaseLetter, .titlecaseLetter, .modifierLetter, .otherLetter,
+             .decimalNumber, .letterNumber, .otherNumber: return true
+        default: return false
+        }
+    }
+
+    private func contains(_ literal: String, in text: String,
+                          before: (Unicode.Scalar) -> Bool, after: (Unicode.Scalar) -> Bool) -> Bool {
+        guard !literal.isEmpty else { return false }
+        var start = text.startIndex
+        while start < text.endIndex,
+              let range = text.range(of: literal, options: .literal, range: start..<text.endIndex) {
+            let left = text.unicodeScalars[..<range.lowerBound].last
+            let right = text.unicodeScalars[range.upperBound...].first
+            if left.map(before) ?? true, right.map(after) ?? true { return true }
+            start = text.unicodeScalars.index(after: range.lowerBound)
+        }
+        return false
     }
 }
 
-public struct ProjectActivity: Sendable {
+public struct ProjectActivity: Sendable, Hashable {
     public let start: Date
     public let end: Date
     public let title: String?
@@ -106,6 +150,8 @@ public struct ProjectReport: Sendable {
     public let projects: [ProjectUsage]
     public let unattributedTime: TimeInterval
     public let unresolvedRequests: Int
+    /// Same order as the input activities; reused by expanded rows without matching again.
+    public let activityProjectIDs: [String?]
 
     public static func build(activities: [ProjectActivity], requests: [ProjectRequest], interval: DateInterval,
                              projectPaths: [String] = [], sessionStats: [ProjectSessionStats]? = nil,
@@ -118,19 +164,22 @@ public struct ProjectReport: Sendable {
             ProjectRequest(date: interval.start, agent: "", sessionID: $0.sessionID, projectPath: $0.projectPath, milliseconds: 0)
         }
         let catalog = TrackedProject.catalog(requests: requests + topicRequests + localRequests, paths: projectPaths)
+        let matcher = ProjectMatcher(projects: catalog)
         var durations: [String: TimeInterval] = [:]
         var unknown: TimeInterval = 0
         var matches: [String: String] = [:]
+        var activityProjectIDs: [String?] = []
         for activity in activities {
             let duration = max(0, min(activity.end, interval.end).timeIntervalSince(max(activity.start, interval.start)))
-            guard duration > 0 else { continue }
+            guard duration > 0 else { activityProjectIDs.append(nil); continue }
             let key = (activity.title ?? "") + "\0" + (activity.url ?? "")
             let projectID: String
             if let cached = matches[key] { projectID = cached }
             else {
-                projectID = TrackedProject.match(title: activity.title, url: activity.url, projects: catalog)?.id ?? ""
+                projectID = matcher.match(title: activity.title, url: activity.url)?.id ?? ""
                 matches[key] = projectID
             }
+            activityProjectIDs.append(projectID.isEmpty ? nil : projectID)
             if !projectID.isEmpty {
                 durations[projectID, default: 0] += duration
             } else { unknown += duration }
@@ -156,6 +205,7 @@ public struct ProjectReport: Sendable {
         }
         return Self(projects: usage, unattributedTime: unknown,
                     unresolvedRequests: sessionStats.map { $0.filter { $0.projectPath == nil }.reduce(requestsWithoutSession) { $0 + $1.count } }
-                        ?? relevant.filter { $0.projectPath == nil }.count)
+                        ?? relevant.filter { $0.projectPath == nil }.count,
+                    activityProjectIDs: activityProjectIDs)
     }
 }

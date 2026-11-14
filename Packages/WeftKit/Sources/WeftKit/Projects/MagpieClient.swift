@@ -1,6 +1,6 @@
 import Foundation
 
-public struct ProjectRequest: Sendable {
+public struct ProjectRequest: Sendable, Hashable {
     public let date: Date
     public let agent: String
     /// The API's session value, unchanged; native_session is only a metadata lookup alias.
@@ -22,7 +22,7 @@ public struct ProjectRequest: Sendable {
 
 
 /// Complete per-session counts from the summary, never extrapolated from request samples.
-public struct ProjectSessionStats: Sendable {
+public struct ProjectSessionStats: Sendable, Hashable {
     /// Summary calls includes failures; errors is a subset and must never be added.
     public let count: Int
     public let projectPath: String?

@@ -5,6 +5,73 @@ import Testing
 struct ProjectAttributionTests {
     let start = Date(timeIntervalSince1970: 1_700_000_000)
 
+    @Test func literalEvidencePreservesBoundariesAndLongestPath() {
+        let projects = TrackedProject.catalog(paths: ["/work/demo", "/work/demo/tools", "/work/demo.extra", "/work/a+b[1]"])
+        #expect(TrackedProject.match(title: "/work/demo/tools/file.swift", url: nil, projects: projects)?.id == "/work/demo/tools")
+        #expect(TrackedProject.match(title: "/work/demo.extra — Editor", url: nil, projects: projects)?.id == "/work/demo.extra")
+        #expect(TrackedProject.match(title: "demo-helper", url: nil, projects: projects) == nil)
+        #expect(TrackedProject.match(title: "中demo文", url: nil, projects: projects) == nil)
+        #expect(TrackedProject.match(title: "a+b[1] — Editor", url: nil, projects: projects)?.id == "/work/a+b[1]")
+        #expect(TrackedProject.match(title: "/work/demoSuffix then /work/demo/file", url: nil, projects: projects)?.id == "/work/demo")
+    }
+
+    @Test func expandedActivityIDsUseFullCatalogAndSameClippedEvidenceAsTotals() {
+        let activities = [
+            ProjectActivity(start: start - 90, end: start - 1, title: "demo"),
+            ProjectActivity(start: start - 30, end: start + 30, title: "demo"),
+            ProjectActivity(start: start + 30, end: start + 60, title: "demo"),
+            ProjectActivity(start: start, end: start + 60, title: "News"),
+            ProjectActivity(start: start + 60, end: start + 90, title: "ambiguous")
+        ]
+        let report = ProjectReport.build(activities: activities, requests: [],
+            interval: DateInterval(start: start, end: start + 60),
+            projectPaths: ["/work/demo", "/work/ambiguous", "/other/ambiguous"])
+        #expect(report.activityProjectIDs == [nil, "/work/demo", "/work/demo", nil, nil])
+        #expect(report.projects.first?.activeTime == 60)
+        #expect(report.unattributedTime == 60)
+    }
+
+    @Test func sevenDayReportStaysWithinInteractiveBudget() async throws {
+        let paths = (0..<80).map { "/work/project-\($0)" }
+        let stats = (0..<160).map {
+            ProjectSessionStats(count: 80, projectPath: paths[$0 % paths.count], sessionID: "session-\($0)",
+                                title: "Investigate feature \($0)")
+        }
+        let activities = (0..<2_200).map {
+            ProjectActivity(start: start + Double($0 * 60), end: start + Double($0 * 60 + 60),
+                            title: "project-\($0 % paths.count) — Editor \($0)")
+        }
+        let input = ProjectReportInput(activities: activities, requests: [],
+            interval: DateInterval(start: start, end: start + 7 * 86_400), projectPaths: paths,
+            sessionStats: stats, requestsWithoutSession: 0, localSessions: [])
+        let clock = ContinuousClock()
+        let began = clock.now
+        let report = try await input.buildInBackground()
+        let elapsed = began.duration(to: clock.now)
+        print("Seven-day fixture: 2200 distinct activities / 80 projects / 160 topics in \(elapsed)")
+        #expect(report.projects.count == 80)
+        #expect(report.activityProjectIDs.compactMap { $0 }.count == activities.count)
+        #expect(report.projects.reduce(0) { $0 + $1.requests } == 12_800)
+        // Generous for debug CI; the previous regex-per-activity approach took many seconds.
+        #expect(elapsed < .seconds(5))
+    }
+
+    @Test func cancelledReportCannotPublishAResult() async {
+        let input = ProjectReportInput(activities: [], requests: [],
+            interval: DateInterval(start: start, end: start + 60), projectPaths: [],
+            sessionStats: [], requestsWithoutSession: 0, localSessions: [])
+        let cancelled = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return try await input.buildInBackground()
+        }
+        do {
+            _ = try await cancelled.value
+            Issue.record("Cancelled report returned a publishable result")
+        } catch {
+            #expect(error is CancellationError)
+        }
+    }
+
     @Test func localSessionsOutsideGatewayAreIncludedWithoutDuplicatingSharedIDs() {
         let stats = [ProjectSessionStats(count: 261, projectPath: "/work/halo-cam", sessionID: "shared")]
         let local = [

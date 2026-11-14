@@ -13,7 +13,7 @@ public struct LocalProjectSessionFile: Sendable {
     }
 }
 
-public struct LocalProjectSession: Sendable {
+public struct LocalProjectSession: Sendable, Hashable {
     public let sessionID: String
     public let projectPath: String
     public let lastDay: String
