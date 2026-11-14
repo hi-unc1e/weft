@@ -7,6 +7,9 @@ final class ProjectStore {
     var requests: [ProjectRequest] = []
     var projectPaths: [String] = []
     var sessionStats: [ProjectSessionStats] = []
+    var localSessions: [LocalProjectSession] = []
+    var recoveredRequests = 0
+    var recoveryComplete = true
     var since: Date?
     var selectedDays = 7
     var requestsWithoutSession = 0
@@ -18,7 +21,7 @@ final class ProjectStore {
     var enabled: Bool {
         didSet {
             UserDefaults.standard.set(!enabled, forKey: "magpieProjectsDisabled")
-            if !enabled { requests = []; projectPaths = []; sessionStats = []; requestsWithoutSession = 0; since = nil; updatedAt = nil; error = nil }
+            if !enabled { requests = []; projectPaths = []; sessionStats = []; localSessions = []; requestsWithoutSession = 0; recoveredRequests = 0; since = nil; updatedAt = nil; error = nil }
         }
     }
     @ObservationIgnored private let client = MagpieClient()
@@ -28,7 +31,7 @@ final class ProjectStore {
     func refresh(days: Int? = nil) async {
         if let days, days != selectedDays {
             selectedDays = days
-            requests = []; sessionStats = []; requestsWithoutSession = 0; since = nil; updatedAt = nil
+            requests = []; sessionStats = []; localSessions = []; requestsWithoutSession = 0; recoveredRequests = 0; since = nil; updatedAt = nil
         }
         guard enabled, !isRefreshing else { return }
         let requestedDays = selectedDays
@@ -43,6 +46,9 @@ final class ProjectStore {
             requests = result.requests
             projectPaths = result.projectPaths
             sessionStats = result.sessionStats
+            localSessions = result.localSessions
+            recoveredRequests = result.recoveredRequests
+            recoveryComplete = result.recoveryComplete
             requestsWithoutSession = result.requestsWithoutSession
             since = result.since
             isTruncated = result.isTruncated

@@ -5,6 +5,22 @@ import Testing
 struct ProjectAttributionTests {
     let start = Date(timeIntervalSince1970: 1_700_000_000)
 
+    @Test func localSessionsOutsideGatewayAreIncludedWithoutDuplicatingSharedIDs() {
+        let stats = [ProjectSessionStats(count: 261, projectPath: "/work/halo-cam", sessionID: "shared")]
+        let local = [
+            LocalProjectSession(sessionID: "shared", projectPath: "/work/halo-cam", lastDay: "2023-11-14"),
+            LocalProjectSession(sessionID: "local-only", projectPath: "/work/HaloCam-Android", lastDay: "2023-11-14")
+        ]
+        let report = ProjectReport.build(activities: [], requests: [], interval: DateInterval(start: start, end: start + 120),
+                                         sessionStats: stats, localSessions: local)
+        #expect(report.projects.count == 1)
+        #expect(report.projects[0].sessions == 2)
+        #expect(report.projects[0].localSessions == 2)
+        #expect(report.projects[0].gatewaySessions == 1)
+        #expect(report.projects[0].requests == 261)
+        #expect(report.projects[0].measuredActiveTime == nil)
+    }
+
     @Test func completeSummaryOverridesTruncatedSamplesAndIncludesMissingSessions() {
         let stats = [
             ProjectSessionStats(count: 3000, projectPath: "/work/halo-cam", sessionID: "a", title: "相机完整会话标题"),

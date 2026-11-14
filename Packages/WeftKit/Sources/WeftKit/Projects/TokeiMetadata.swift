@@ -1,6 +1,33 @@
 import Foundation
 import Darwin
 
+public struct LocalProjectSessionFile: Sendable {
+    public let sessionID: String
+    public let projectPath: String
+    public let url: URL
+
+    public init(sessionID: String, projectPath: String, url: URL) {
+        self.sessionID = sessionID
+        self.projectPath = projectPath
+        self.url = url
+    }
+}
+
+public struct LocalProjectSession: Sendable {
+    public let sessionID: String
+    public let projectPath: String
+    public let lastDay: String
+    /// Deduplicated local responses, not HTTP requests. Unknown remains nil.
+    public let responseCount: Int?
+
+    public init(sessionID: String, projectPath: String, lastDay: String, responseCount: Int? = nil) {
+        self.sessionID = sessionID
+        self.projectPath = projectPath
+        self.lastDay = lastDay
+        self.responseCount = responseCount
+    }
+}
+
 /// Optional, read-only metadata. The manifest is the sole authority; never scan source sessions.
 actor TokeiMetadataIndex {
     private static let fileLimit = 4 * 1024 * 1024
@@ -26,6 +53,7 @@ actor TokeiMetadataIndex {
     private let directory: URL
     private var cache: [String: Cached] = [:]
     private(set) var filesRead = 0
+    private(set) var localSessionConflictCount = 0
 
     init(directory: URL = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent(".tokei/cache/scan_cache.d")) {
@@ -33,18 +61,132 @@ actor TokeiMetadataIndex {
     }
 
     func snapshot() -> [String: MagpieMetadataIndex.Entry] {
+        var result: [String: MagpieMetadataIndex.Entry] = [:]
+        var conflicts: Set<String> = []
+        visitEntries { tool, key, entry in
+            guard let path = entry["proj"] as? String, path.hasPrefix("/"),
+                  !path.contains("\0"), let id = sessionID(tool: tool, key: key, entry: entry),
+                  !conflicts.contains(id) else { return }
+            if let old = result[id], old.path != path {
+                result.removeValue(forKey: id)
+                conflicts.insert(id)
+                return
+            }
+            result[id] = .init(path: path, title: nonempty(entry["title"]) ?? result[id]?.title)
+        }
+        return result
+    }
+
+    /// Inclusive local calendar days, matching Tokei's date-keyed cache (not precise instants).
+    /// Only manifest-listed shards participate; duplicate versions contribute at most one ID.
+    func localSessions(since: Date, until: Date) -> [LocalProjectSession] {
+        localSessionConflictCount = 0
+        guard since <= until else { return [] }
+        let validDay = dayFilter(since: since, until: until)
+        var paths: [String: String] = [:]
+        var lastDays: [String: String] = [:]
+        var conflicts: Set<String> = []
+        visitEntries(includePrimeAgent: true) { tool, key, entry in
+            guard let path = entry["proj"] as? String, path.hasPrefix("/"), !path.contains("\0"),
+                  let id = sessionID(tool: tool, key: key, entry: entry) else { return }
+            // Include child sessions: this is the complete local ID directory, not Tokei's
+            // top-level session metric (which suppresses proj_nosession entries).
+            // Conflicts across all current versions are unsafe even when one version is older.
+            if let previous = paths[id], previous != path { conflicts.insert(id) }
+            paths[id] = path
+            let days = (entry["days"] as? [String: Any] ?? [:]).compactMap { day, value in
+                value is [String: Any] && validDay(day) ? day : nil
+            }
+            let recordDays = (entry["records"] as? [[String: Any]] ?? []).compactMap { record in
+                (record["date"] as? String).flatMap { validDay($0) ? $0 : nil }
+            }
+            if let latest = (days + recordDays).max() {
+                lastDays[id] = max(lastDays[id] ?? latest, latest)
+            }
+        }
+        localSessionConflictCount = conflicts.count
+        return lastDays.keys.sorted().compactMap { id in
+            guard !conflicts.contains(id), let path = paths[id], let day = lastDays[id] else { return nil }
+            // Usage records are not HTTP request counts; do not sum duplicate cache versions.
+            return LocalProjectSession(sessionID: id, projectPath: path, lastDay: day)
+        }
+    }
+
+    /// Selects manifest-keyed DSH files with records in the inclusive local-day window.
+    /// Preserves distinct versions of the same SID. Does not read response bodies.
+    /// URLs are checked now; consumers must reopen safely against subsequent symlink replacement.
+    func activeDSHFiles(since: Date, until: Date) -> [LocalProjectSessionFile] {
+        guard since <= until else { return [] }
+        let projects = Dictionary(uniqueKeysWithValues: localSessions(since: since, until: until)
+            .map { ($0.sessionID, $0.projectPath) })
+        let validDay = dayFilter(since: since, until: until)
+        let allowedRoot = directory.deletingLastPathComponent()
+            .appendingPathComponent("dsh-sessions", isDirectory: true).path
+        var files: [String: LocalProjectSessionFile] = [:]
+        var conflicts: Set<String> = []
+        visitEntries { tool, key, entry in
+            guard tool == "deepseek_harness",
+                  let id = sessionID(tool: tool, key: key, entry: entry),
+                  let path = projects[id], entry["proj"] as? String == path,
+                  let records = entry["records"] as? [[String: Any]],
+                  records.contains(where: { ($0["date"] as? String).map(validDay) == true }),
+                  safeDSHFile(key, beneath: allowedRoot) else { return }
+            if let old = files[key], old.sessionID != id { conflicts.insert(key) }
+            files[key] = LocalProjectSessionFile(sessionID: id, projectPath: path,
+                                                url: URL(fileURLWithPath: key))
+        }
+        return files.keys.sorted().filter { !conflicts.contains($0) }.compactMap { files[$0] }
+    }
+
+    private func safeDSHFile(_ path: String, beneath root: String) -> Bool {
+        guard path.hasPrefix(root + "/"), path.hasSuffix(".jsonl"),
+              !path.contains("\\"), !path.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) })
+        else { return false }
+        let parts = path.dropFirst().split(separator: "/", omittingEmptySubsequences: false)
+        guard parts.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." }) else { return false }
+        // Walk every component with openat: neither parent directories nor the leaf may be links.
+        var descriptor = open("/", O_RDONLY | O_DIRECTORY | O_CLOEXEC)
+        guard descriptor >= 0 else { return false }
+        defer { close(descriptor) }
+        for (index, part) in parts.enumerated() {
+            let isLeaf = index == parts.count - 1
+            let next = openat(descriptor, String(part), O_RDONLY | O_NOFOLLOW | O_CLOEXEC
+                              | O_NONBLOCK | (isLeaf ? 0 : O_DIRECTORY))
+            guard next >= 0 else { return false }
+            close(descriptor)
+            descriptor = next
+        }
+        var info = stat()
+        return fstat(descriptor, &info) == 0 && (info.st_mode & S_IFMT) == S_IFREG
+    }
+
+    private func dayFilter(since: Date, until: Date) -> (String) -> Bool {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.timeZone = .current
+        formatter.dateFormat = "yyyy-MM-dd"
+        formatter.isLenient = false
+        let lower = formatter.string(from: since), upper = formatter.string(from: until)
+        return { value in
+            guard value.count == 10, value >= lower, value <= upper,
+                  let date = formatter.date(from: value) else { return false }
+            return formatter.string(from: date) == value
+        }
+    }
+
+    private func visitEntries(includePrimeAgent: Bool = false,
+                              _ visit: (String, String, [String: Any]) -> Void) {
         let root = open(directory.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
-        guard root >= 0 else { cache.removeAll(); return [:] }
+        guard root >= 0 else { cache.removeAll(); return }
         defer { close(root) }
         var budget = Self.totalLimit
         var retained: Set<String> = []
         defer { cache = cache.filter { retained.contains($0.key) } }
         guard let manifest = read("manifest.json", root: root, budget: &budget, retained: &retained),
-              let shards = manifest["shards"] as? [String: Any] else { return [:] }
-        var result: [String: MagpieMetadataIndex.Entry] = [:]
-        var conflicts: Set<String> = []
+              let shards = manifest["shards"] as? [String: Any] else { return }
         var visited: Set<String> = []
-        for tool in Self.supported {
+        for tool in Self.supported + (includePrimeAgent ? ["prime_agent"] : []) {
             let names = (shards[tool] as? [String]) ?? (shards[tool] as? String).map { [$0] } ?? []
             for name in names.prefix(4096) {
                 guard visited.count < 4096, visited.insert(name).inserted,
@@ -62,19 +204,10 @@ actor TokeiMetadataIndex {
                     }
                 }
                 for (key, entry) in entries {
-                    guard let path = entry["proj"] as? String, path.hasPrefix("/"),
-                          !path.contains("\0"), let id = sessionID(tool: tool, key: key, entry: entry),
-                          !conflicts.contains(id) else { continue }
-                    if let old = result[id], old.path != path {
-                        result.removeValue(forKey: id)
-                        conflicts.insert(id)
-                        continue
-                    }
-                    result[id] = .init(path: path, title: nonempty(entry["title"]) ?? result[id]?.title)
+                    visit(tool, key, entry)
                 }
             }
         }
-        return result
     }
 
     private func read(_ name: String, root: Int32, budget: inout Int,

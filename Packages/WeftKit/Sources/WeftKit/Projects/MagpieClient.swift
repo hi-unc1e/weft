@@ -44,6 +44,9 @@ public struct MagpieClient: Sendable {
         public let totalAvailable: Int
         public let projectPaths: [String]
         public let sessionStats: [ProjectSessionStats]
+        public let localSessions: [LocalProjectSession]
+        public let recoveredRequests: Int
+        public let recoveryComplete: Bool
         /// Raw server groups (a session ID may appear under more than one agent).
         public let summarySessionCount: Int
         public let period: String
@@ -81,6 +84,7 @@ public struct MagpieClient: Sendable {
     private let session: URLSession
     private let metadata: MagpieMetadataIndex
     private let tokei: TokeiMetadataIndex?
+    private let recovery: GatewaySessionRecovery?
     private let now: @Sendable () -> Date
 
     public init() {
@@ -96,17 +100,19 @@ public struct MagpieClient: Sendable {
             codexRoot: home.appendingPathComponent(".codex/sessions"),
             claudeRoot: home.appendingPathComponent(".claude/projects"),
             titleIndex: home.appendingPathComponent(".codex/session_index.jsonl"),
-            tokeiDirectory: home.appendingPathComponent(".tokei/cache/scan_cache.d")
+            tokeiDirectory: home.appendingPathComponent(".tokei/cache/scan_cache.d"),
+            gatewayLedger: home.appendingPathComponent(".config/magpie/usage.jsonl")
         )
     }
 
     init(endpoint: URL, session: URLSession, codexRoot: URL, claudeRoot: URL,
-         titleIndex: URL? = nil, tokeiDirectory: URL? = nil,
+         titleIndex: URL? = nil, tokeiDirectory: URL? = nil, gatewayLedger: URL? = nil,
          now: @escaping @Sendable () -> Date = { Date() }) {
         self.endpoint = endpoint
         self.session = session
         self.metadata = MagpieMetadataIndex(codexRoot: codexRoot, claudeRoot: claudeRoot, titleIndex: titleIndex)
         self.tokei = tokeiDirectory.map { TokeiMetadataIndex(directory: $0) }
+        self.recovery = gatewayLedger.map { GatewaySessionRecovery(ledger: $0) }
         self.now = now
     }
 
@@ -118,6 +124,7 @@ public struct MagpieClient: Sendable {
     /// Magpie periods are calendar days: 7d starts six midnights ago, today at local midnight.
     /// Fetching one page avoids unstable offset pagination as new requests arrive.
     public func requestsWithMetadata(days: Int = 7) async throws -> Batch {
+        let end = now()
         guard days == 1 || days == 7 else { throw ClientError.invalidResponse }
         let period = days == 1 ? "today" : "7d"
         let fractional = ISO8601DateFormatter()
@@ -182,15 +189,41 @@ public struct MagpieClient: Sendable {
         }
         // The API groups by (id, agent); one logical session can span agents.
         let groups = Dictionary(grouping: summary.sessions, by: \.id)
-        let stats = groups.keys.sorted().map { id in
+        var stats = groups.keys.sorted().map { id in
             let match = index.lookup(id)
             return ProjectSessionStats(count: groups[id]!.reduce(0) { $0 + $1.calls },
                                        projectPath: match?.path, sessionID: id, title: match?.title)
         }
+        let localSessions = await tokei?.localSessions(since: start, until: end) ?? []
+        var recoveredRequests = 0
+        var recoveryComplete = true
+        if let recovery, let tokei {
+            let files = await tokei.activeDSHFiles(since: start, until: end)
+            let restored = await recovery.recover(files: files, since: start, until: end)
+            recoveryComplete = restored.isComplete
+            let available = summary.calls - stats.reduce(0) { $0 + $1.count }
+            if restored.matchedRequests <= available {
+                var byID = Dictionary(uniqueKeysWithValues: stats.map { ($0.sessionID, $0) })
+                for item in restored.sessionStats {
+                    if let old = byID[item.sessionID] {
+                        if let path = old.projectPath, let recoveredPath = item.projectPath, path != recoveredPath {
+                            recoveryComplete = false
+                            continue
+                        }
+                        byID[item.sessionID] = ProjectSessionStats(count: old.count + item.count,
+                            projectPath: old.projectPath ?? item.projectPath, sessionID: item.sessionID,
+                            title: old.title ?? item.title)
+                    } else { byID[item.sessionID] = item }
+                    recoveredRequests += item.count
+                }
+                stats = byID.values.sorted { $0.sessionID < $1.sessionID }
+            } else { recoveryComplete = false }
+        }
         return Batch(requests: result, isTruncated: page.rows.count < page.total,
                      totalAvailable: summary.calls,
                      projectPaths: Array(Set(index.entries.values.compactMap(\.path))).sorted(),
-                     sessionStats: stats, summarySessionCount: summary.sessionCount, period: period, since: start)
+                     sessionStats: stats, localSessions: localSessions, recoveredRequests: recoveredRequests,
+                     recoveryComplete: recoveryComplete, summarySessionCount: summary.sessionCount, period: period, since: start)
     }
 
     private func fetch<T: Decodable>(_ url: URL, query: [URLQueryItem]) async throws -> T {

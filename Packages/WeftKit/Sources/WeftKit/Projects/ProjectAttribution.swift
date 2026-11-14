@@ -95,6 +95,8 @@ public struct ProjectUsage: Identifiable, Sendable {
     public let activeTime: TimeInterval
     public let requests: Int
     public let sessions: Int
+    public let localSessions: Int
+    public let gatewaySessions: Int
     public let lastRequest: Date?
     /// A matched duration is a lower bound. No matches means unknown, never a measured zero.
     public var measuredActiveTime: TimeInterval? { activeTime > 0 ? activeTime : nil }
@@ -107,12 +109,15 @@ public struct ProjectReport: Sendable {
 
     public static func build(activities: [ProjectActivity], requests: [ProjectRequest], interval: DateInterval,
                              projectPaths: [String] = [], sessionStats: [ProjectSessionStats]? = nil,
-                             requestsWithoutSession: Int = 0) -> Self {
+                             requestsWithoutSession: Int = 0, localSessions: [LocalProjectSession] = []) -> Self {
         let topicRequests = (sessionStats ?? []).map {
             ProjectRequest(date: interval.start, agent: "", sessionID: $0.sessionID, projectPath: $0.projectPath,
                            milliseconds: 0, sessionTitle: $0.title)
         }
-        let catalog = TrackedProject.catalog(requests: requests + topicRequests, paths: projectPaths)
+        let localRequests = localSessions.map {
+            ProjectRequest(date: interval.start, agent: "", sessionID: $0.sessionID, projectPath: $0.projectPath, milliseconds: 0)
+        }
+        let catalog = TrackedProject.catalog(requests: requests + topicRequests + localRequests, paths: projectPaths)
         var durations: [String: TimeInterval] = [:]
         var unknown: TimeInterval = 0
         var matches: [String: String] = [:]
@@ -131,14 +136,20 @@ public struct ProjectReport: Sendable {
             } else { unknown += duration }
         }
         let relevant = requests.filter { $0.date >= interval.start && $0.date < interval.end }
-        let usage = catalog.map { project in
+        let allUsage: [ProjectUsage] = catalog.map { project -> ProjectUsage in
             let rows = relevant.filter { row in row.projectPath.map { project.paths.contains($0) } ?? false }
             let stats = sessionStats?.filter { $0.projectPath.map { project.paths.contains($0) } ?? false }
+            let requestCount: Int = stats?.reduce(0) { $0 + $1.count } ?? rows.count
+            let gatewayIDs: Set<String> = Set(stats?.map(\.sessionID) ?? rows.compactMap(\.sessionID))
+            let projectLocalSessions = localSessions.filter { project.paths.contains($0.projectPath) }
+            let localIDs: Set<String> = Set(projectLocalSessions.map(\.sessionID))
             return ProjectUsage(project: project, activeTime: durations[project.id, default: 0],
-                                requests: stats?.reduce(0) { $0 + $1.count } ?? rows.count,
-                                sessions: stats.map { Set($0.map(\.sessionID)).count } ?? Set(rows.compactMap(\.sessionID)).count,
+                                requests: requestCount,
+                                sessions: gatewayIDs.union(localIDs).count, localSessions: localIDs.count,
+                                gatewaySessions: gatewayIDs.count,
                                 lastRequest: rows.map(\.date).max())
-        }.filter { $0.activeTime > 0 || $0.requests > 0 }.sorted {
+        }
+        let usage = allUsage.filter { $0.activeTime > 0 || $0.requests > 0 || $0.sessions > 0 }.sorted {
             if $0.activeTime != $1.activeTime { return $0.activeTime > $1.activeTime }
             if $0.requests != $1.requests { return $0.requests > $1.requests }
             return $0.project.name < $1.project.name

@@ -24,7 +24,7 @@ struct ProjectsView: View {
         let report = ProjectReport.build(activities: segments.map {
             ProjectActivity(start: $0.start, end: $0.end, title: $0.title, url: $0.url)
         }, requests: store.requests, interval: interval, projectPaths: store.projectPaths,
-           sessionStats: store.sessionStats, requestsWithoutSession: store.requestsWithoutSession)
+           sessionStats: store.sessionStats, requestsWithoutSession: store.requestsWithoutSession, localSessions: store.localSessions)
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 HStack {
@@ -60,8 +60,12 @@ struct ProjectsView: View {
                     .font(.caption).foregroundStyle(.secondary)
                 if let error = store.error { Text(error).foregroundStyle(.orange).textSelection(.enabled) }
                 if let updated = store.updatedAt {
-                    Text("更新于 \(updated.formatted(date: .omitted, time: .shortened)) · 请求和会话数来自完整区间汇总；活动详情采样 \(store.requests.count) 条。")
+                    Text("更新于 \(updated.formatted(date: .omitted, time: .shortened)) · 完整区间汇总 + 本地会话去重；按响应 ID 补回 \(store.recoveredRequests) 次请求。详情采样 \(store.requests.count) 条。")
                         .font(.caption).foregroundStyle(.secondary)
+                    if !store.recoveryComplete {
+                        Text("部分本地请求记录未能完整对账，当前项目请求数仅为已确认的下限。")
+                            .font(.caption).foregroundStyle(.orange)
+                    }
                 }
                 if report.projects.isEmpty {
                     ContentUnavailableView(store.enabled ? "尚无可识别项目" : "项目识别已暂停", systemImage: "folder",
@@ -78,12 +82,14 @@ struct ProjectsView: View {
                             Text(usage.measuredActiveTime.map { "已识别前台 ≥\(Format.duration($0))" } ?? "前台时长未知").monospacedDigit()
                         }
                         HStack {
-                            Text("\(usage.requests) 次 AI 请求 · \(usage.sessions) 个会话")
+                            Text("网关已关联 \(usage.requests) 次请求 · \(usage.sessions) 个会话（含子会话）")
                             Spacer()
                             if let last = usage.lastRequest {
                                 Text("最近采样 \(last.formatted(date: .abbreviated, time: .shortened))")
                             }
                         }.font(.caption).foregroundStyle(.secondary)
+                        Text("本地 \(usage.localSessions) 个 · 网关已关联 \(usage.gatewaySessions) 个；跨来源按会话 ID 去重。")
+                            .font(.caption).foregroundStyle(.secondary)
                         Button(selected == usage.id ? "收起活动" : "查看活动") {
                             selected = selected == usage.id ? nil : usage.id
                         }.buttonStyle(.link)
