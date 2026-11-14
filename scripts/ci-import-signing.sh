@@ -11,10 +11,12 @@ temp_root=$(cd "${RUNNER_TEMP:-${TMPDIR:-/private/tmp}}" && pwd -P)
 bounded_cleanup() {
   python3 - "$@" <<'PY'
 import subprocess, sys
+operation = ' '.join(sys.argv[3:5] if sys.argv[1] == 'sudo' else sys.argv[1:3])
+print('Signing cleanup: ' + operation, flush=True)
 try:
     result = subprocess.run(sys.argv[1:], timeout=20)
 except subprocess.TimeoutExpired:
-    print('Signing cleanup operation timed out after 20 seconds.', file=sys.stderr)
+    print('Signing cleanup timed out after 20 seconds: ' + operation, file=sys.stderr)
     sys.exit(124)
 sys.exit(result.returncode)
 PY
@@ -28,19 +30,68 @@ cleanup() {
   local keychain="$dir/signing.keychain-db" failed=0
   rm -f -- "$dir/signing.p12" "$dir/p12-password" "$dir/keychain-password"
   if [[ -f "$dir/.trust-requested" ]]; then
-    [[ -s "$dir/certificate.pem" && ! -L "$dir/certificate.pem" ]] || die 'Missing certificate needed to remove temporary trust.'
-    if bounded_cleanup sudo -n security remove-trusted-cert -d "$dir/certificate.pem"; then
-      rm -f -- "$dir/.trust-requested"
+    # remove-trusted-cert hung on hosted runners (43546338904). Use the same
+    # supported setter as import, replacing codeSign trust with explicit deny.
+    # The public deny record lasts until VM disposal; no private key may remain.
+    if [[ "${GITHUB_ACTIONS:-}" == true && "${RUNNER_ENVIRONMENT:-}" == github-hosted &&
+          -s "$dir/certificate.pem" && ! -L "$dir/certificate.pem" ]] &&
+        bounded_cleanup sudo -n security add-trusted-cert -d -r deny -p codeSign -k "$keychain" "$dir/certificate.pem"; then
+      if python3 - "$dir/certificate.pem" "$keychain" <<'PY'
+import subprocess, sys
+try:
+    result = subprocess.run(['security', 'verify-cert', '-L', '-p', 'codeSign',
+                             '-c', sys.argv[1], '-k', sys.argv[2]],
+                            capture_output=True, text=True, timeout=20)
+except subprocess.TimeoutExpired:
+    sys.exit('Timed out verifying codeSign denial.')
+# Apple's verify_cert.c emits this only for kSecTrustResultDeny. A generic
+# failure, missing file, timeout or crash is NOT proof of revoked trust.
+if result.returncode != 1 or 'kSecTrustResultDeny' not in result.stderr:
+    sys.exit('Expected explicit codeSign denial was not observed.')
+print('Verified explicit codeSign denial; public deny record remains until VM disposal.')
+PY
+      then
+        rm -f -- "$dir/.trust-requested"
+      else
+        failed=1
+      fi
     else
+      printf '%s\n' 'Cannot revoke temporary trust: hosted-runner guard, certificate or deny operation failed.' >&2
       failed=1
     fi
   fi
   if [[ -e "$keychain" ]]; then
     bounded_cleanup security delete-keychain "$keychain" || failed=1
   fi
+  # Prune only our entry, preserving other keychains added since import.
+  if ! python3 - "$keychain" <<'PY'
+import os, shlex, subprocess, sys
+target = os.path.realpath(sys.argv[1])
+def paths():
+    return shlex.split(subprocess.check_output(
+        ['security', 'list-keychains', '-d', 'user'], text=True, timeout=20))
+try:
+    current = paths()
+    remaining = [p for p in current if os.path.realpath(p) != target]
+    if remaining != current:
+        subprocess.run(['security', 'list-keychains', '-d', 'user', '-s', *remaining],
+                       check=True, timeout=20)
+    if any(os.path.realpath(p) == target for p in paths()):
+        sys.exit('Temporary signing keychain remains in the search list.')
+    if os.path.lexists(sys.argv[1]):
+        sys.exit('Temporary signing keychain file still exists.')
+except (subprocess.SubprocessError, OSError) as error:
+    sys.exit('Cannot verify signing keychain removal: ' + str(error))
+print('Verified temporary signing keychain deleted and absent from user search list.')
+PY
+  then
+    failed=1
+  fi
   # Retain the certificate and ownership marker if a retry is needed.
   (( failed == 0 )) || return 1
   rm -rf -- "$dir"
+  [[ ! -e "$dir" && ! -L "$dir" ]] || return 1
+  printf '%s\n' 'Verified temporary signing directory and private-key material removed.'
 }
 
 case "${1:-import}" in
@@ -108,7 +159,7 @@ certificate_identity=$(/usr/bin/openssl x509 -in "$WEFT_SIGNING_DIR/certificate.
 certificate_identity=${certificate_identity#*=}
 certificate_identity=${certificate_identity//:/}
 [[ "$certificate_identity" == "$identity" ]] || die 'PKCS12 leaf certificate does not match MACOS_SIGNING_IDENTITY.'
-# Local bootstrap owns persistent user trust. Only CI adds/removes temporary trust.
+# Local bootstrap owns persistent user trust. Only CI adds/revokes temporary trust.
 if [[ "${GITHUB_ACTIONS:-}" == true ]]; then
   # User-domain trust can prompt for a GUI authorization. Only an ephemeral hosted
   # runner may use noninteractive administrator trust, restricted to code signing.

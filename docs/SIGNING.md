@@ -62,8 +62,8 @@ bash scripts/ci-import-signing.sh cleanup
 ```
 
 清理只接受临时根目录下带归属标记的 `weft-ci-signing.*` 目录。
-若本次在 CI 添加过信任，先 `sudo -n security remove-trusted-cert -d <证书>` 移除该临时 runner 的信任，再删除专用 keychain 和临时目录。
-移除信任失败会报错并保留清理材料，避免静默遗留。
+`remove-trusted-cert` 在实际 hosted runner 中等待 GUI 授权并挂起，因此清理通过同一受支持的设置接口，将该证书的临时 `codeSign` 信任替换为显式 `deny`，并验证拒绝结果。只在临时 GitHub-hosted runner 执行；公开的 deny 记录随 VM 销毁，不在维护者本机执行。
+随后删除私钥钥匙串、清理搜索列表并检查文件确已不存在，最后删除临时目录。命令和步骤均有超时；任一步验证失败仍报错，不能仅忽略异常。
 脚本失败时自行清理，workflow 另用 `always()` 兜底；不删除固定签名目录。
 本机模式使用本地 bootstrap 已建立的持久信任，不添加或移除证书信任。
 不要在日常本机伪造 `GITHUB_ACTIONS=true`，此标志仅用于一次性 CI 用户。

@@ -89,7 +89,7 @@ jobs:
           retention-days: 14
       - name: Remove temporary signing keychain
         if: always()
-        timeout-minutes: 2
+        timeout-minutes: 3
         shell: bash
         run: |
           if [[ -n "${WEFT_SIGNING_DIR:-}" && -d "$WEFT_SIGNING_DIR" ]]; then
