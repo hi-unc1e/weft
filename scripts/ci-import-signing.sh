@@ -1,5 +1,5 @@
 #!/bin/bash
-# Import an existing identity; trust only this certificate for user-domain code signing.
+# Import an existing identity; CI trusts only this certificate for code signing.
 set +x
 set -euo pipefail
 umask 077
@@ -7,20 +7,39 @@ umask 077
 die() { printf '%s\n' "$*" >&2; exit 1; }
 temp_root=$(cd "${RUNNER_TEMP:-${TMPDIR:-/private/tmp}}" && pwd -P)
 
+# macOS has no built-in timeout command. Bound each cleanup operation separately.
+bounded_cleanup() {
+  python3 - "$@" <<'PY'
+import subprocess, sys
+try:
+    result = subprocess.run(sys.argv[1:], timeout=20)
+except subprocess.TimeoutExpired:
+    print('Signing cleanup operation timed out after 20 seconds.', file=sys.stderr)
+    sys.exit(124)
+sys.exit(result.returncode)
+PY
+}
+
 cleanup() {
   local dir=${WEFT_SIGNING_DIR:-}
   [[ -n "$dir" && -d "$dir" && ! -L "$dir" ]] || die 'Missing or invalid WEFT_SIGNING_DIR.'
   [[ "$(cd "$dir/.." && pwd -P)" == "$temp_root" ]] || die 'Cleanup must stay directly inside the temporary root.'
   [[ "${dir##*/}" == weft-ci-signing.* && -f "$dir/.weft-ci-signing" ]] || die 'Refusing to clean an unowned directory.'
-  local keychain="$dir/signing.keychain-db"
+  local keychain="$dir/signing.keychain-db" failed=0
+  rm -f -- "$dir/signing.p12" "$dir/p12-password" "$dir/keychain-password"
   if [[ -f "$dir/.trust-requested" ]]; then
     [[ -s "$dir/certificate.pem" && ! -L "$dir/certificate.pem" ]] || die 'Missing certificate needed to remove temporary trust.'
-    sudo -n security remove-trusted-cert -d "$dir/certificate.pem" || return 1
-    rm -f -- "$dir/.trust-requested"
+    if bounded_cleanup sudo -n security remove-trusted-cert -d "$dir/certificate.pem"; then
+      rm -f -- "$dir/.trust-requested"
+    else
+      failed=1
+    fi
   fi
   if [[ -e "$keychain" ]]; then
-    security delete-keychain "$keychain"
+    bounded_cleanup security delete-keychain "$keychain" || failed=1
   fi
+  # Retain the certificate and ownership marker if a retry is needed.
+  (( failed == 0 )) || return 1
   rm -rf -- "$dir"
 }
 

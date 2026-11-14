@@ -28,7 +28,10 @@ jobs:
     if: >-
       github.repository == 'hi-unc1e/weft' &&
       (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
-    runs-on: macos-15
+    # Run 43545135520: Xcode 26.2 AssetCatalogAgent crashed on macOS 15
+    # with missing CoreMedia/MediaToolbox symbols. Compile icons on macOS 26;
+    # the tests job still exercises the macOS 15 deployment baseline.
+    runs-on: macos-26
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
@@ -37,6 +40,7 @@ jobs:
       - name: Install XcodeGen
         run: brew install xcodegen
       - name: Import fixed signing identity
+        timeout-minutes: 3
         env:
           MACOS_SIGNING_P12: ${{ secrets.MACOS_SIGNING_P12 }}
           MACOS_SIGNING_PASSWORD: ${{ secrets.MACOS_SIGNING_PASSWORD }}
@@ -85,6 +89,7 @@ jobs:
           retention-days: 14
       - name: Remove temporary signing keychain
         if: always()
+        timeout-minutes: 2
         shell: bash
         run: |
           if [[ -n "${WEFT_SIGNING_DIR:-}" && -d "$WEFT_SIGNING_DIR" ]]; then

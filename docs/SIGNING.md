@@ -4,6 +4,10 @@
 固定证书及私钥、签名 identifier `me.weishu.Weft` 和 designated requirement，用于保持应用身份。
 首次安装后由用户授权辅助功能，后续更新复用；实际授权延续由本机安装验收确认。
 自签名仍可能触发 macOS 的未验证开发者提示。
+自签证书没有 Apple Team ID，因此本地 Debug 也设置 `ENABLE_DEBUG_DYLIB=NO`，将代码保留在主二进制中，避免独立 debug dylib 被库验证拒绝；hardened runtime 和库验证保持开启。
+
+本地入口：`bash scripts/build-local.sh`（依赖 XcodeGen）。
+`python3 scripts/verify-signing.py <旧构建.app> <新构建.app>` 验证不同内容仍满足同一证书身份要求；签名证明不等于已获辅助功能授权，首次授权仍由用户确认。
 
 ## 本机产物与 secrets
 

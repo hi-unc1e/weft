@@ -4,5 +4,8 @@ CODE_SIGN_STYLE = Manual
 CODE_SIGN_IDENTITY = Henry Local macOS Apps
 DEVELOPMENT_TEAM =
 OTHER_CODE_SIGN_FLAGS = --keychain "$(HOME)/.sign_keys_macos_app/codesign.keychain-db" --timestamp=none
+// Self-signed identities have no Apple Team ID. Keep debug code in the executable
+// rather than a separate preview dylib; retain hardened runtime/library validation.
+ENABLE_DEBUG_DYLIB = NO
 
 #include? "Local.xcconfig"
