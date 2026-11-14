@@ -2,11 +2,11 @@
 
 [Download v0.2.0](https://github.com/hi-unc1e/weft/releases/tag/v0.2.0) · [Install, privacy and validation](RELEASE.md) · [Changelog](CHANGELOG.md)
 
-This fork targets macOS 15+ and supports user-configured OpenAI-compatible models. Release binaries are Apple Silicon only, ad-hoc signed and **not notarized**; macOS may block downloaded copies. The upstream notarization statements below refer to upstream distributions, not this fork.
+This fork targets macOS 15+ and supports user-configured OpenAI-compatible models. Published v0.2.0 binaries are Apple Silicon only, ad-hoc signed and **not notarized**; macOS may block downloaded copies. New local and CI builds reuse a fixed self-signed identity (see [signing](docs/SIGNING.md)). The upstream notarization statements below refer to upstream distributions, not this fork.
 
 > 本地适配版：支持 macOS 15+；Apple 本地模型需要 macOS 26+。在“设置 → 模型”中选择 OpenAI 兼容接口，填写 Base URL（如 `https://api.openai.com/v1`）、Model 和 API Key，点击“保存并连接”。支持本地无密钥服务。主要界面与 AI 输出为简体中文。
 > 远程配置保存并启用后，相关活动信息会发送到配置的服务商；API Key 仅存系统钥匙串。临时错误最多尝试 3 次，活动摘要失败后冷却 5 分钟再补齐，也可手动重试。
-> 本地构建采用临时签名，未公证；重新构建后可能需要重新授权辅助功能。
+> 本地与 CI 构建统一复用 `~/.sign_keys_macos_app` 中的固定自签名身份，未公证。由旧临时签名切换时需重新授权一次；后续构建保持同一身份。[签名与 CI](docs/SIGNING.md)
 
 ## 项目识别（本地 Magpie）
 
@@ -16,7 +16,7 @@ This fork targets macOS 15+ and supports user-configured OpenAI-compatible model
 - 项目是独立维度，Code 等活动分类继续保留。窗口标题、网址中的项目路径、项目名或明确的会话主题用于归属；多项目冲突、缺少证据时保留为待归属。
 - 请求数和会话数取自 Magpie 完整区间的 session 汇总；今天 / 最近 7 天使用接口返回的自然日边界，详情仅采样最近 200 条，不用于统计。无法关联的请求（包括没有会话 ID 的请求）单独计数。
 - 后台 AI 请求不折算为你的工作时长。没有可归属的前台记录显示「前台时长未知」，已识别的时长显示下限；历史缺失标题无法补回。页面显示标题覆盖率及当前辅助功能授权状态。
-- 临时签名每次构建都会改变程序指纹。系统中旧的 Weft 授权条目可能仍显示启用，却与新版本不匹配。此时到系统设置 → 隐私与安全性 → 辅助功能，移除旧 Weft 并重新添加 `/Applications/Weft.app`，重启应用。应用不会自行修改系统授权。
+- 旧临时签名的系统授权可能仍显示启用，却与新版身份不匹配。切换到固定身份后，到系统设置 → 隐私与安全性 → 辅助功能，移除旧 Weft 并重新添加 `/Applications/Weft.app`，重启应用。后续更新不得更换固定证书；应用不会自行修改系统授权。
 - 约 5 分钟自动刷新，也可手动刷新。关闭「读取本地 Magpie」可暂停读取并清空当前内存结果；网关离线时保留上一次结果并提示错误。
 
 接口依据：[Magpie reference — Usage API](https://github.com/yetone/magpie/blob/main/docs/reference.md)。默认仅连接 `127.0.0.1:3425`；本机只读用量接口无需将网关密钥写入代码。

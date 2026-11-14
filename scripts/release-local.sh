@@ -1,10 +1,13 @@
 #!/bin/bash
-# Build a distributable ad-hoc-signed Apple Silicon app from committed sources only.
+# Build a distributable Apple Silicon app with the fixed identity from committed sources only.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 repo_root=$PWD
 [[ -z $(git status --porcelain) ]] || { echo "Commit changes before packaging." >&2; exit 1; }
 revision=$(git rev-parse HEAD)
+python3 scripts/setup-signing.py
+signing_root="$HOME/.sign_keys_macos_app"
+signing_identity=$(tr -d '\r\n' < "$signing_root/identity.sha1")
 stage=$(mktemp -d /private/tmp/weft-release.XXXXXX)
 # Keep the staging directory for inspection; it contains public committed files only.
 git archive HEAD | tar -x -C "$stage"
@@ -13,7 +16,8 @@ xcodegen generate --quiet
 swift test --package-path Packages/WeftKit
 xcodebuild -quiet -project Weft.xcodeproj -scheme Weft -configuration Release \
   -derivedDataPath "$stage/DerivedData" -destination 'generic/platform=macOS' \
-  ARCHS=arm64 ONLY_ACTIVE_ARCH=NO CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= \
+  ARCHS=arm64 ONLY_ACTIVE_ARCH=NO CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY="$signing_identity" DEVELOPMENT_TEAM= \
+  OTHER_CODE_SIGN_FLAGS="--keychain $signing_root/codesign.keychain-db --timestamp=none" \
   WEFT_SOURCE_REVISION="$revision" DEBUG_INFORMATION_FORMAT=dwarf build
 app="$stage/DerivedData/Build/Products/Release/Weft.app"
 codesign --verify --deep --strict "$app"

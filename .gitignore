@@ -5,6 +5,7 @@ build/
 xcuserdata/
 DerivedData/
 .DS_Store
+__pycache__/
 Config/Local.xcconfig
 
 # Local settings, runtime history, credentials and private delivery notes
@@ -14,6 +15,9 @@ Config/Local.xcconfig
 *.p12
 *.pem
 *.key
+*.keychain-db
+*.pfx
+*-password
 *.store
 *.store-*
 *.sqlite*

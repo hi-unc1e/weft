@@ -1,10 +1,8 @@
-// Shared build settings. Signing defaults to ad-hoc ("Sign to Run Locally").
-//
-// Ad-hoc signatures change on every build, so macOS forgets the Accessibility grant each
-// time. For day-to-day development copy Local.xcconfig.example to Local.xcconfig and
-// point it at your own signing identity; that file is git-ignored.
+// Reuse the fixed local identity. Run scripts/setup-signing.py once before building.
+// Never fall back to ad-hoc signing: a changing identity invalidates Accessibility grants.
 CODE_SIGN_STYLE = Manual
-CODE_SIGN_IDENTITY = -
+CODE_SIGN_IDENTITY = Henry Local macOS Apps
 DEVELOPMENT_TEAM =
+OTHER_CODE_SIGN_FLAGS = --keychain "$(HOME)/.sign_keys_macos_app/codesign.keychain-db" --timestamp=none
 
 #include? "Local.xcconfig"

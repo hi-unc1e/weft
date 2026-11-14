@@ -24,7 +24,7 @@ swift test --filter "SessionEngineTests/startAndExtend"      # one test
 WEFT_AI_TESTS=1 swift test --filter FoundationModelsHarness  # real on-device model (needs Apple Intelligence)
 ```
 
-Signing: `Config/Base.xcconfig` signs ad hoc by default, and optionally includes the git-ignored `Config/Local.xcconfig` (copy it from `Local.xcconfig.example`). With ad hoc signing, macOS drops the Accessibility grant after every rebuild, so window titles stop showing up until you grant it again.
+Signing: always reuse the fixed identity in `~/.sign_keys_macos_app` via `Config/Base.xcconfig`. Run `python3 scripts/setup-signing.py` to unlock/reuse it; never rotate it or fall back to ad-hoc signing. Private keys and passwords must stay outside the repository. CI imports the same encrypted identity from GitHub Secrets. See `docs/SIGNING.md`; `scripts/verify-signing.py` checks two different builds against the same designated requirement. Moving from the old ad-hoc identity requires one new Accessibility grant.
 
 Releases: `scripts/release.sh` builds a Developer ID–signed, notarized `build/release/Weft-<version>.dmg` for direct download. Bump `MARKETING_VERSION` and `CURRENT_PROJECT_VERSION` in `project.yml` first. The one-time setup (Developer ID certificate, and the `asc` CLI signed in with an App Store Connect API key for notarization) is described at the top of the script.
 

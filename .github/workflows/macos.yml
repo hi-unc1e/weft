@@ -1,0 +1,92 @@
+name: macOS
+
+on:
+  push:
+    branches: [master, main, 'release/**']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  DEVELOPER_DIR: /Applications/Xcode_26.2.app/Contents/Developer
+
+jobs:
+  tests:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Test WeftKit
+        run: swift test --package-path Packages/WeftKit
+
+  signed-build:
+    needs: tests
+    if: >-
+      github.repository == 'hi-unc1e/weft' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Import fixed signing identity
+        env:
+          MACOS_SIGNING_P12: ${{ secrets.MACOS_SIGNING_P12 }}
+          MACOS_SIGNING_PASSWORD: ${{ secrets.MACOS_SIGNING_PASSWORD }}
+          MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+        run: bash scripts/ci-import-signing.sh import
+      - name: Build signed Release
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodegen generate
+          xcodebuild -quiet -project Weft.xcodeproj -scheme Weft -configuration Release \
+            -derivedDataPath "$RUNNER_TEMP/WeftDerivedData" -destination 'generic/platform=macOS' \
+            ARCHS=arm64 ONLY_ACTIVE_ARCH=NO CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM= \
+            CODE_SIGN_IDENTITY="$WEFT_SIGNING_IDENTITY" \
+            OTHER_CODE_SIGN_FLAGS="--keychain \"$WEFT_SIGNING_KEYCHAIN\" --identifier me.weishu.Weft --timestamp=none" \
+            ENABLE_DEBUG_DYLIB=NO GCC_GENERATE_DEBUGGING_SYMBOLS=NO DEBUG_INFORMATION_FORMAT= \
+            SWIFT_SERIALIZE_DEBUGGING_OPTIONS=NO COPY_PHASE_STRIP=YES STRIP_INSTALLED_PRODUCT=YES \
+            WEFT_SOURCE_REVISION="$GITHUB_SHA" build
+      - name: Verify identity and package
+        shell: bash
+        run: |
+          set -euo pipefail
+          app="$RUNNER_TEMP/WeftDerivedData/Build/Products/Release/Weft.app"
+          codesign --verify --deep --strict "$app"
+          codesign --verify --strict \
+            -R "=identifier \"me.weishu.Weft\" and certificate leaf = H\"$WEFT_SIGNING_IDENTITY\"" "$app"
+          codesign --display --requirements - "$app"
+          test "$(/usr/libexec/PlistBuddy -c 'Print WeftSourceRevision' "$app/Contents/Info.plist")" = "$GITHUB_SHA"
+          python3 - "$app" <<'PY'
+          import pathlib, re, sys
+          root = pathlib.Path(sys.argv[1])
+          for path in root.rglob('*'):
+              if not path.is_file():
+                  continue
+              data = path.read_bytes()
+              if path.name.endswith('.debug.dylib') or re.search(rb'/Users/[^/\x00\s]+/', data):
+                  raise SystemExit('Debug artifact or user path found: ' + str(path.relative_to(root)))
+          PY
+          mkdir -p "$RUNNER_TEMP/WeftArtifacts"
+          ditto -c -k --sequesterRsrc --keepParent "$app" "$RUNNER_TEMP/WeftArtifacts/Weft-arm64.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Weft-macOS-arm64-${{ github.sha }}
+          path: ${{ runner.temp }}/WeftArtifacts/Weft-arm64.zip
+          if-no-files-found: error
+          retention-days: 14
+      - name: Remove temporary signing keychain
+        if: always()
+        shell: bash
+        run: |
+          if [[ -n "${WEFT_SIGNING_DIR:-}" && -d "$WEFT_SIGNING_DIR" ]]; then
+            bash scripts/ci-import-signing.sh cleanup
+          fi

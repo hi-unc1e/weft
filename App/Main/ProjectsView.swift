@@ -51,7 +51,7 @@ struct ProjectsView: View {
                         .foregroundStyle(.orange)
                 } else if !model.accessibilityGranted {
                     HStack {
-                        Text("当前版本缺少有效的辅助功能授权，无法读取窗口标题。临时签名更新后需重新授权。")
+                        Text("当前签名身份尚无有效的辅助功能授权，无法读取窗口标题。切换到固定身份后需重新授权一次。")
                         Button("打开辅助功能设置") { SystemSettings.openAccessibility() }
                     }.foregroundStyle(.orange)
                 }
